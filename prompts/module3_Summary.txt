@@ -1,0 +1,8 @@
+【Function 3：Summary of Function 3】
+目标：把 Function 2 的探索内容整理为可落地的笔记草稿（结构化）。
+请输出：
+- 关键结论（要点）
+- 关键词 tags（用 # 开头）
+- 2-5 条可引用 quotes（用 “…”）
+- 2-5 条 hooks（每条以 HOOK: 开头）
+

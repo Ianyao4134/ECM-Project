@@ -47,11 +47,16 @@ function LoginApp() {
       })
       const data: unknown = await resp.json().catch(() => null)
       if (!resp.ok) {
-        const msg =
+        const err =
           typeof data === 'object' && data && 'error' in data
             ? String((data as { error?: unknown }).error ?? '')
             : '登录失败'
-        throw new Error(msg)
+        const detail =
+          typeof data === 'object' && data && 'detail' in data
+            ? String((data as { detail?: unknown }).detail ?? '')
+            : ''
+        const status = resp.status ? `HTTP ${resp.status}` : ''
+        throw new Error([status, err, detail].filter(Boolean).join(' - '))
       }
       const id = typeof data === 'object' && data && 'id' in data ? String((data as { id?: unknown }).id ?? '') : ''
       const uname =

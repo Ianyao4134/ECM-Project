@@ -20,6 +20,8 @@ app.use(
   createProxyMiddleware({
     target: ECM_BACKEND,
     changeOrigin: true,
+    // Express strips mount path (/ecm) before middleware; add it back for Flask routes.
+    pathRewrite: (path) => `/ecm${path}`,
     // Help SSE/streaming responses pass through proxies without buffering.
     onProxyRes(proxyRes) {
       proxyRes.headers['x-accel-buffering'] = 'no'

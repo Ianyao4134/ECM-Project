@@ -17,17 +17,24 @@ function nextPath(type: UserType) {
 
 function LoginApp() {
   const [userType, setUserType] = useState<UserType>('student')
-  const [form, setForm] = useState({ username: '', password: '' })
+  const [form, setForm] = useState({ username: '', password: '', captcha: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const CAPTCHA_BY_TYPE: Record<UserType, string> = { student: '123456', mentor: 'asdfgh', prompts: 'xcvbnm' }
+  const expectedCaptcha = CAPTCHA_BY_TYPE[userType]
 
   const typeMeta = useMemo(() => USER_TYPE_LABELS.find((x) => x.id === userType)!, [userType])
 
   const handleLogin = async () => {
     const username = form.username.trim()
     const password = form.password.trim()
+    const captcha = form.captcha.trim()
     if (!username || !password) {
       setError('请输入用户名和密码')
+      return
+    }
+    if (captcha !== expectedCaptcha) {
+      setError('验证码错误')
       return
     }
     setLoading(true)
@@ -36,7 +43,7 @@ function LoginApp() {
       const resp = await fetch('/ecm/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, captcha, userType }),
       })
       const data: unknown = await resp.json().catch(() => null)
       if (!resp.ok) {
@@ -61,8 +68,13 @@ function LoginApp() {
   const handleRegister = async () => {
     const username = form.username.trim()
     const password = form.password.trim()
+    const captcha = form.captcha.trim()
     if (!username || !password) {
       setError('请输入用户名和密码')
+      return
+    }
+    if (captcha !== expectedCaptcha) {
+      setError('验证码错误')
       return
     }
     setLoading(true)
@@ -71,7 +83,7 @@ function LoginApp() {
       const resp = await fetch('/ecm/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, captcha, userType }),
       })
       const data: unknown = await resp.json().catch(() => null)
       if (!resp.ok) {
@@ -146,6 +158,15 @@ function LoginApp() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void handleLogin()
                 }}
+              />
+            </label>
+            <label className="loginField">
+              <span>验证码</span>
+              <input
+                value={form.captcha}
+                onChange={(e) => setForm((p) => ({ ...p, captcha: e.target.value }))}
+                placeholder="请输入验证码"
+                disabled={loading}
               />
             </label>
             {error ? <div className="error">登录错误：{error}</div> : null}

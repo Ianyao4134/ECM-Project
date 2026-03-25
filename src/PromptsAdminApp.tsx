@@ -48,8 +48,9 @@ function PromptsAdminApp() {
       return null
     }
   })
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' })
+  const [loginForm, setLoginForm] = useState({ username: '', password: '', captcha: '' })
   const [loginError, setLoginError] = useState<string | null>(null)
+  const expectedCaptcha = 'xcvbnm'
   const [prompts, setPrompts] = useState<PromptRecord>(EMPTY_PROMPTS)
   const [loading, setLoading] = useState(true)
   const [savingKey, setSavingKey] = useState<PromptKeys | null>(null)
@@ -121,9 +122,14 @@ function PromptsAdminApp() {
   const handleLogin = async () => {
     const username = loginForm.username.trim()
     const password = loginForm.password.trim()
+    const captcha = loginForm.captcha.trim()
 
     if (!username || !password) {
       setLoginError('请输入用户名和密码')
+      return
+    }
+    if (captcha !== expectedCaptcha) {
+      setLoginError('验证码错误')
       return
     }
 
@@ -134,7 +140,7 @@ function PromptsAdminApp() {
       const resp = await fetch('/ecm/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, captcha, userType: 'prompts' }),
       })
       const data: unknown = await resp.json().catch(() => null)
       if (!resp.ok) {
@@ -282,6 +288,12 @@ function PromptsAdminApp() {
                   type="password"
                   value={loginForm.password}
                   onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+                />
+                <input
+                  style={{ fontSize: 12, padding: '2px 4px' }}
+                  placeholder="验证码"
+                  value={loginForm.captcha}
+                  onChange={(e) => setLoginForm((prev) => ({ ...prev, captcha: e.target.value }))}
                 />
                 <button type="button" onClick={() => void handleLogin()}>
                   登录 / 注册

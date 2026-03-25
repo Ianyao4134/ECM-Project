@@ -8,6 +8,7 @@
     "dev:web": "vite --host 127.0.0.1 --port 5173",
     "dev:server": "node server/index.js",
     "build": "tsc -b && vite build",
+    "start": "node server/prod.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -15,6 +16,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "http-proxy-middleware": "^3.0.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0"

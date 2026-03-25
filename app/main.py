@@ -470,13 +470,18 @@ def _sse(data: str, *, event: str | None = None) -> str:
 def auth_login():
     """
     简单登录：如果用户不存在，则自动创建。
-    Body: { "username": "...", "password": "..." }
+    Body: { "username": "...", "password": "...", "captcha": "...", "userType": "student|mentor|prompts" }
     """
     body = request.get_json(silent=True) or {}
     username = (body.get("username") or "").strip()
     password = (body.get("password") or "").strip()
+    captcha = (body.get("captcha") or "").strip()
+    user_type = (body.get("userType") or body.get("user_type") or "").strip() or "student"
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
+    expected = {"student": "123456", "mentor": "asdfgh", "prompts": "xcvbnm"}.get(user_type, "123456")
+    if captcha != expected:
+        return jsonify({"error": "invalid captcha"}), 403
     try:
         user = upsert_user(username, password)
     except ValueError as e:
@@ -489,13 +494,18 @@ def auth_login():
 def auth_register():
     """
     简单注册：用户已存在则报错，不做自动创建。
-    Body: { "username": "...", "password": "..." }
+    Body: { "username": "...", "password": "...", "captcha": "...", "userType": "student|mentor|prompts" }
     """
     body = request.get_json(silent=True) or {}
     username = (body.get("username") or "").strip()
     password = (body.get("password") or "").strip()
+    captcha = (body.get("captcha") or "").strip()
+    user_type = (body.get("userType") or body.get("user_type") or "").strip() or "student"
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
+    expected = {"student": "123456", "mentor": "asdfgh", "prompts": "xcvbnm"}.get(user_type, "123456")
+    if captcha != expected:
+        return jsonify({"error": "invalid captcha"}), 403
     try:
         user = create_user(username, password)
     except ValueError as e:
@@ -2378,6 +2388,11 @@ def module1_next():
         )
 
     # Append user's message
+    # If module1 was started with an empty question (e.g. client restart),
+    # fill it with the first real user input so downstream steps have context.
+    if not _safe_str(getattr(s, "question", "")).strip() and int(s.step) == 1:
+        s.question = user_input.strip()
+        save_module1_session(s)
     s.history.append({"role": "user", "content": user_input})
     # Capture the previous assistant "导师提问" to prevent question repetition loops.
     prev_assistant_text = ""
@@ -2537,6 +2552,12 @@ def module1_next_stream():
         return Response(stream_with_context(gen_mod()), mimetype="text/event-stream")
 
     # normal progression
+    # If module1 was started with an empty question (e.g. client restart),
+    # fill it with the first real user input so downstream steps have context.
+    if not _safe_str(getattr(s, "question", "")).strip() and int(s.step) == 1:
+        s.question = user_input.strip()
+        save_module1_session(s)
+
     s.history.append({"role": "user", "content": user_input})
     executed_step = int(s.step)
     system_prompt = _module1_system_prompt(executed_step, user_id)
@@ -2942,6 +2963,24 @@ def module2_next_stream():
     system_prompt = _module2_system_prompt(int(s.step), user_id, action=action)
     history_tail = s.history[-10:]
     convo = "\n".join([f"{m['role']}: {m['content']}" for m in history_tail])
+
+    # Capture the previous assistant "导师提问" to prevent question repetition loops.
+    # Note: At this point we already appended the current user_input to s.history.
+    # So the previous assistant should be in s.history[:-1].
+    prev_assistant_text = ""
+    for m in reversed(s.history[:-1]):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            prev_assistant_text = _safe_str(m.get("content") or "")
+            break
+    prev_question = ""
+    if prev_assistant_text:
+        # Best-effort extraction: content after "👉 导师提问"
+        parts = prev_assistant_text.split("👉 导师提问", 1)
+        if len(parts) == 2:
+            prev_question = parts[1].strip()
+        else:
+            prev_question = prev_assistant_text.strip()[:240]
+
     model_user_input = "\n\n".join(
         [
             "已确认的问题定义：",
@@ -3150,26 +3189,44 @@ def module4_generate_stream():
     body = request.get_json(silent=True) or {}
     m1_id = (body.get("module1_session_id") or "").strip()
     m2_id = (body.get("module2_session_id") or "").strip()
+    # If module1 session is lost on server restart, front-end can still provide
+    # the confirmed definition text so Module4 can be generated without Module1 session state.
+    module1_definition_override = _safe_str(body.get("module1_definition") or body.get("module1Definition") or "")
     force = bool(body.get("force") or False)
     user_input = (body.get("user_input") or "").strip()
     user_id = (body.get("userId") or body.get("user_id") or "").strip()
+    module2_history_raw = body.get("module2_history") or body.get("module2History") or []
 
-    if not m1_id or not m2_id:
-        return jsonify({"error": "module1_session_id and module2_session_id are required"}), 400
+    if not m2_id:
+        return jsonify({"error": "module2_session_id is required"}), 400
 
-    m1 = get_module1_session(m1_id)
+    m1 = get_module1_session(m1_id) if m1_id else None
     m2 = get_module2_session(m2_id)
-    if not m1 or not m1.confirmed_definition:
-        return jsonify({"error": "Module1 not confirmed yet"}), 400
-    if not m2:
+    module2_history_override: list[dict[str, str]] = []
+    if isinstance(module2_history_raw, list):
+        for x in module2_history_raw:
+            if not isinstance(x, dict):
+                continue
+            role = _safe_str(x.get("role") or "").strip()
+            content = _safe_str(x.get("content") or "")
+            if role in ("user", "assistant") and content.strip():
+                module2_history_override.append({"role": role, "content": content})
+
+    if module1_definition_override.strip():
+        definition = module1_definition_override.strip()
+    else:
+        if not m1 or not m1.confirmed_definition:
+            return jsonify({"error": "Module1 not confirmed yet"}), 400
+    if not m2 and not module2_history_override:
         return jsonify({"error": "Module2 session not found"}), 404
-    if not (m2.done or force or any(k in user_input for k in ["总结", "生成笔记", "结束探索"])):
+    m2_done = bool(m2.done) if m2 else bool(module2_history_override)
+    if not (m2_done or force or any(k in user_input for k in ["总结", "生成笔记", "结束探索"])):
         return jsonify({"error": "Module2 not finished. Send '总结/生成笔记/结束探索' or finish Step5."}), 400
 
-    definition = m1.confirmed_definition.strip()
     notes = load_notes()
 
-    history_tail = (m2.history or [])[-16:]
+    source_history = (m2.history or []) if m2 else module2_history_override
+    history_tail = source_history[-16:]
     convo = "\n".join([f"{m['role']}: {m['content']}" for m in history_tail])
     meta_blob = (
         f"tags: {notes.get('tags', [])}\n"
@@ -3270,6 +3327,24 @@ def module5_generate():
     force = bool(body.get("force") or False)
     user_input = (body.get("user_input") or "").strip()
     user_id = (body.get("userId") or body.get("user_id") or "").strip()
+    module5_history_raw = body.get("module5_history") or body.get("module5History") or body.get("history") or []
+
+    module5_history: list[dict[str, str]] = []
+    if isinstance(module5_history_raw, list):
+        for x in module5_history_raw:
+            if not isinstance(x, dict):
+                continue
+            role = _safe_str(x.get("role") or "").strip()
+            content = _safe_str(x.get("content") or "")
+            if role in ("user", "assistant") and content.strip():
+                module5_history.append({"role": role, "content": content.strip()})
+
+    history_tail = module5_history[-10:]
+    history_block = "\n".join(
+        f"{('用户' if m['role'] == 'user' else '导师')}: {m['content']}" for m in history_tail
+    ).strip()
+    if not history_block:
+        history_block = "(无历史交互)"
     if not m4_id:
         return jsonify({"error": "module4_session_id is required"}), 400
 
@@ -3287,6 +3362,12 @@ def module5_generate():
             "",
             "Module 4 报告：",
             s4.report_md,
+            "",
+            "Function 5 历史交互（仅参考）：",
+            history_block,
+            "",
+            "本轮用户输入：",
+            user_input or "(无)",
             "",
             "交互区元数据：",
             f"tags: {notes.get('tags', [])}\nquotes: {notes.get('quotes', [])}\nhooks: {notes.get('hooks', [])}",
@@ -3327,6 +3408,24 @@ def module5_generate_stream():
     force = bool(body.get("force") or False)
     user_input = (body.get("user_input") or "").strip()
     user_id = (body.get("userId") or body.get("user_id") or "").strip()
+    module5_history_raw = body.get("module5_history") or body.get("module5History") or body.get("history") or []
+
+    module5_history: list[dict[str, str]] = []
+    if isinstance(module5_history_raw, list):
+        for x in module5_history_raw:
+            if not isinstance(x, dict):
+                continue
+            role = _safe_str(x.get("role") or "").strip()
+            content = _safe_str(x.get("content") or "")
+            if role in ("user", "assistant") and content.strip():
+                module5_history.append({"role": role, "content": content.strip()})
+
+    history_tail = module5_history[-10:]
+    history_block = "\n".join(
+        f"{('用户' if m['role'] == 'user' else '导师')}: {m['content']}" for m in history_tail
+    ).strip()
+    if not history_block:
+        history_block = "(无历史交互)"
     if not m4_id:
         return jsonify({"error": "module4_session_id is required"}), 400
 
@@ -3344,6 +3443,12 @@ def module5_generate_stream():
             "",
             "Module 4 报告：",
             s4.report_md,
+            "",
+            "Function 5 历史交互（仅参考）：",
+            history_block,
+            "",
+            "本轮用户输入：",
+            user_input or "(无)",
             "",
             "交互区元数据：",
             f"tags: {notes.get('tags', [])}\nquotes: {notes.get('quotes', [])}\nhooks: {notes.get('hooks', [])}",
@@ -3407,6 +3512,24 @@ def module5_generate_stream_from_report():
     force = bool(body.get("force") or False)
     user_input = _safe_str(body.get("user_input") or "")
     user_id = _safe_str(body.get("userId") or body.get("user_id") or "").strip()
+    module5_history_raw = body.get("module5_history") or body.get("module5History") or body.get("history") or []
+
+    module5_history: list[dict[str, str]] = []
+    if isinstance(module5_history_raw, list):
+        for x in module5_history_raw:
+            if not isinstance(x, dict):
+                continue
+            role = _safe_str(x.get("role") or "").strip()
+            content = _safe_str(x.get("content") or "")
+            if role in ("user", "assistant") and content.strip():
+                module5_history.append({"role": role, "content": content.strip()})
+
+    history_tail = module5_history[-10:]
+    history_block = "\n".join(
+        f"{('用户' if m['role'] == 'user' else '导师')}: {m['content']}" for m in history_tail
+    ).strip()
+    if not history_block:
+        history_block = "(无历史交互)"
 
     if not module4_report_md:
         return jsonify({"error": "module4ReportMd is required"}), 400
@@ -3421,6 +3544,12 @@ def module5_generate_stream_from_report():
             "",
             "Module 4 报告：",
             module4_report_md.strip(),
+            "",
+            "Function 5 历史交互（仅参考）：",
+            history_block,
+            "",
+            "本轮用户输入：",
+            user_input or "(无)",
             "",
             "交互区元数据：",
             f"tags: {notes.get('tags', [])}\nquotes: {notes.get('quotes', [])}\nhooks: {notes.get('hooks', [])}",

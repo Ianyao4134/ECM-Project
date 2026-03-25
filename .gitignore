@@ -22,3 +22,24 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Local runtime data (users, projects, SQLite)
+/data/
+/app/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+
+# Temporary exports / local artifacts
+tmp_export.docx
+tmp_*.docx

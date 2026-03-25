@@ -390,8 +390,9 @@ function App() {
       return null
     }
   })
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' })
+  const [loginForm, setLoginForm] = useState({ username: '', password: '', captcha: '' })
   const [loginError, setLoginError] = useState<string | null>(null)
+  const expectedCaptcha = '123456'
 
   const [projects, setProjects] = useState<{ id: string; name: string; updatedAt?: number }[]>([])
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
@@ -522,6 +523,32 @@ function App() {
         if (!dataStr) continue
 
         if (currentEvent === 'final') {
+          try {
+            onFinal(JSON.parse(dataStr))
+          } catch {
+            onFinal(dataStr)
+          }
+        } else {
+          onDelta(dataStr)
+        }
+      }
+    }
+
+    // Flush remaining buffer if the server closed the connection without the trailing `\n\n`.
+    // This prevents the last few characters from being dropped.
+    if (buf.trim()) {
+      const chunk = buf
+      buf = ''
+      const lines = chunk.split('\n').map((l) => l.trimEnd())
+      const dataLines: string[] = []
+      let lastEvent: string | null = null
+      for (const line of lines) {
+        if (line.startsWith('event:')) lastEvent = line.slice('event:'.length).trim()
+        if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trimStart())
+      }
+      const dataStr = dataLines.join('\n')
+      if (dataStr) {
+        if (lastEvent === 'final') {
           try {
             onFinal(JSON.parse(dataStr))
           } catch {
@@ -743,6 +770,8 @@ function App() {
       }
     }
     if (key === 'f5') {
+      // Let users continue multi-turn even if an old project state had f5Done=true.
+      setF5Done(false)
       f5TimingRef.current = {
         enteredAt: 0,
         leftAt: 0,
@@ -1001,8 +1030,13 @@ function App() {
   const handleLogin = async () => {
     const username = loginForm.username.trim()
     const password = loginForm.password.trim()
+    const captcha = loginForm.captcha.trim()
     if (!username || !password) {
       setLoginError('请输入用户名和密码')
+      return
+    }
+    if (captcha !== expectedCaptcha) {
+      setLoginError('验证码错误')
       return
     }
     setLoginError(null)
@@ -1010,7 +1044,7 @@ function App() {
       const resp = await fetch('/ecm/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, captcha, userType: 'student' }),
       })
       const data: unknown = await resp.json().catch(() => null)
       if (!resp.ok) {
@@ -1557,8 +1591,9 @@ function App() {
     if (key === 'f5' && f5Done) return
 
     // Off-topic detection for Function 2 (方案A：关键词/正则，简单稳定)
-    // Only apply when user types manually in textarea (directText is null).
-    if (key === 'f2' && directText == null) {
+    // Only apply when user clicks "追问" (followup) and the user typed manually in textarea.
+    // This avoids showing the warning during normal "回复"/submit turns.
+    if (key === 'f2' && action === 'followup' && directText == null) {
       const offTopic = shouldF2RejectOffTopic(text)
       if (offTopic) {
         const ok = window.confirm('你这句话可能偏离当前 Step 主线。是否允许切换话题并继续对话？')
@@ -1593,7 +1628,9 @@ function App() {
           const startResp = await fetch('/ecm/module1/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: '' }),
+            // Use the first user input as "question" so backend context isn't missing
+            // when you reopen and restart Function 1.
+            body: JSON.stringify({ question: text }),
           })
           const startData: unknown = await startResp.json().catch(() => null)
           if (!startResp.ok) {
@@ -1682,14 +1719,42 @@ function App() {
         }
 
         const aiStartTs = Date.now()
-        const nextResp = await fetch('/ecm/module1/next_stream', {
+        let nextResp = await fetch('/ecm/module1/next_stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: module1SessionId, user_input: text, userId: currentUser?.id }),
         })
         if (!nextResp.ok) {
           const errText = await nextResp.text().catch(() => '')
-          throw new Error(errText || 'stream request failed')
+          if (nextResp.status === 404) {
+            const startResp = await fetch('/ecm/module1/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ question: text }),
+            })
+            const startData: unknown = await startResp.json().catch(() => null)
+            if (startResp.ok) {
+              const sid =
+                typeof startData === 'object' && startData && 'session_id' in startData
+                  ? String((startData as { session_id?: unknown }).session_id ?? '')
+                  : ''
+              if (sid) {
+                setModule1SessionId(sid)
+                setModule1Step(1)
+                setModule1AwaitingConfirm(false)
+                setModule1TotalSteps(5)
+                nextResp = await fetch('/ecm/module1/next_stream', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ session_id: sid, user_input: text, userId: currentUser?.id }),
+                })
+              }
+            }
+          }
+          if (!nextResp.ok) {
+            const retryErr = await nextResp.text().catch(() => '')
+            throw new Error(retryErr || errText || 'stream request failed')
+          }
         }
 
         // insert an assistant placeholder, then stream into it
@@ -1864,7 +1929,7 @@ function App() {
         const userMsg: ChatMessage = { role: 'user', content: text, parentId, depth, action, ts: userTs }
 
         // If already finished (or Function 4 already has content), do not trigger module2 regeneration; just guide user.
-        const f2LikelyFinished = f2Finished || (chats.f4 ?? []).some((m) => m.role === 'assistant' && m.content.trim())
+        const f2LikelyFinished = f2Finished
         if (f2LikelyFinished) {
           setChats((prev) => ({
             ...prev,
@@ -1905,9 +1970,11 @@ function App() {
           return
         }
 
-        const isStart = !module2SessionId
-        const url = isStart ? '/ecm/module2/start_stream' : '/ecm/module2/next_stream'
-        const payload = isStart
+        // module2 session 在后端是内存态：如果后端进程重启/丢失，会导致 404 session not found。
+        // 这里做一次“自动重建”，确保 Function 2 的回复/追问都能继续运行。
+        let isStart = !module2SessionId
+        let url = isStart ? '/ecm/module2/start_stream' : '/ecm/module2/next_stream'
+        let payload = isStart
           ? {
               definition: effectiveModule1Definition,
               module1_session_id: module1SessionId,
@@ -1918,14 +1985,48 @@ function App() {
           : { session_id: module2SessionId, user_input: text, userId: currentUser?.id, action, parent_id: parentId }
 
         const f2AiStartTs = Date.now()
-        const nextResp = await fetch(url, {
+        let nextResp = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         })
         if (!nextResp.ok) {
           const errText = await nextResp.text().catch(() => '')
-          throw new Error(errText || 'stream request failed')
+          // 只做一次重试，避免无限循环；重建后走 start_stream（从 Step 1 重新生成）。
+          if (nextResp.status === 404 && !isStart) {
+            try {
+              setModule2SessionId(null)
+              setModule2RootNodeId(null)
+              setModule2MainNodeId(null)
+              setModule2Step(null)
+              setModule2LastExtractSig(null)
+              setModule2DisplayStep(null)
+
+              isStart = true
+              url = '/ecm/module2/start_stream'
+              payload = {
+                definition: effectiveModule1Definition,
+                module1_session_id: module1SessionId,
+                userId: currentUser?.id,
+                action: 'submit',
+                parent_id: null,
+              }
+
+              nextResp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              })
+              // if retry ok: continue; if retry still fail: handled below
+            } catch {
+              // fall through to outer error handling
+            }
+          }
+
+          if (!nextResp.ok) {
+            const retryText = await nextResp.text().catch(() => '')
+            throw new Error(retryText || errText || 'stream request failed')
+          }
         }
 
         setChats((prev) => ({ ...prev, f2: [...(prev.f2 ?? []), { role: 'assistant', content: '', parentId, depth, action }] }))
@@ -2039,7 +2140,9 @@ function App() {
 
         // 当模块二已到最后一步且用户输入「确认」时：标记模块二完成，并自动生成模块四的第一轮洞察报告
         const effectiveModule2Sid = module2SessionId || (typeof nextData === 'object' && nextData && 'session_id' in nextData ? String(nextData.session_id ?? '') : '')
-        if (step && Number.isFinite(step) && step >= 5 && text.includes('确认') && module1SessionId && effectiveModule2Sid) {
+        // Function 2 结束（输入/点击“确认”）后自动进入 Function 4。
+        // module1_session_id 在后端是内存态，服务重启后可能丢失；因此同时把“已确认的问题定义”文本传给后端兜底。
+        if (step && Number.isFinite(step) && step >= 5 && text.includes('确认') && effectiveModule1Definition && effectiveModule2Sid) {
           setF2Finished(true)
           f2TimingRef.current.leftAt = Date.now()
           void persistF2Analytics()
@@ -2051,7 +2154,10 @@ function App() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 module1_session_id: module1SessionId,
+                // Back-end can fall back to this when module1 session state is missing.
+                module1_definition: effectiveModule1Definition,
                 module2_session_id: effectiveModule2Sid,
+                module2_history: (chatsRef.current.f2 ?? []).map((m) => ({ role: m.role, content: m.content })),
                 force: true,
                 user_input: text,
                 userId: currentUser?.id,
@@ -2128,6 +2234,7 @@ function App() {
                   module4ReportMd: lastF4Assistant.content,
                   force: true,
                   user_input: text,
+                module5_history: (chatsRef.current.f5 ?? []).map((m) => ({ role: m.role, content: m.content })),
                   userId: currentUser?.id,
                 }),
               })
@@ -2145,7 +2252,6 @@ function App() {
                 },
                 () => {},
               )
-              setF5Done(true)
               f5TimingRef.current.leftAt = Date.now()
               void persistF5Analytics()
             } catch {
@@ -2172,7 +2278,9 @@ function App() {
         }
 
         if (!module4SessionId) {
-          if (!module1SessionId || !module2SessionId) {
+          // Module1 session is server-memory state; reload后可能丢失。
+          // 这里允许只要前端已经有“已确认的问题定义文本”，就继续生成 Function 4。
+          if (!module2SessionId) {
             setChats((prev) => ({
               ...prev,
               f4: [...(prev.f4 ?? []), { role: 'assistant', content: '请先完成 Function 1（确认）与 Function 2（探索）。' }],
@@ -2186,7 +2294,9 @@ function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               module1_session_id: module1SessionId,
+              module1_definition: module1DefinitionRef.current ?? module1Definition ?? '',
               module2_session_id: module2SessionId,
+              module2_history: (chatsRef.current.f2 ?? []).map((m) => ({ role: m.role, content: m.content })),
               force,
               user_input: text,
               userId: currentUser?.id,
@@ -2315,6 +2425,7 @@ function App() {
                   module4_session_id: module4SessionId,
                   user_input: text,
                   force: true,
+                  module5_history: (chatsRef.current.f5 ?? []).map((m) => ({ role: m.role, content: m.content })),
                   userId: currentUser?.id,
                 }),
               })
@@ -2333,7 +2444,6 @@ function App() {
                 },
                 () => {},
               )
-              setF5Done(true)
               f5TimingRef.current.leftAt = Date.now()
               void persistF5Analytics()
             } catch {
@@ -2362,7 +2472,10 @@ function App() {
               f5TimingRef.current.clickCount = 0
               f5TimingRef.current.newCount = 0
             }
-            setChats((prev) => ({ ...prev, f5: [...(prev.f5 ?? []), { role: 'assistant', content: '' }] }))
+            setChats((prev) => ({
+              ...prev,
+              f5: [...(prev.f5 ?? []), { role: 'user', content: text }, { role: 'assistant', content: '' }],
+            }))
             const resp5 = await fetch('/ecm/module5/generate_stream_from_report', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -2371,6 +2484,7 @@ function App() {
                 module4ReportMd: reportMd,
                 force: true,
                 user_input: text,
+                module5_history: (chatsRef.current.f5 ?? []).map((m) => ({ role: m.role, content: m.content })),
                 userId: currentUser?.id,
               }),
             })
@@ -2388,7 +2502,6 @@ function App() {
               },
               () => {},
             )
-            setF5Done(true)
             f5TimingRef.current.leftAt = Date.now()
             void persistF5Analytics()
           } catch {
@@ -2398,7 +2511,7 @@ function App() {
         }
 
         // 已经确认完毕，再次输入则视为微调 / 追加说明，强制重新生成新的洞察报告
-        if (!module1SessionId || !module2SessionId) {
+        if (!module2SessionId) {
           setChats((prev) => ({
             ...prev,
             f4: [...(prev.f4 ?? []), { role: 'assistant', content: '当前 Function 1/2 的会话信息缺失，无法为 Function 4 进行微调重生成。你可以重新开始 Function 1/2 或重新加载对话后再试。' }],
@@ -2412,7 +2525,9 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             module1_session_id: module1SessionId,
+            module1_definition: module1DefinitionRef.current ?? module1Definition ?? '',
             module2_session_id: module2SessionId,
+            module2_history: (chatsRef.current.f2 ?? []).map((m) => ({ role: m.role, content: m.content })),
             force: true,
             user_input: text,
             userId: currentUser?.id,
@@ -2484,6 +2599,7 @@ function App() {
                 module4ReportMd: lastF4Assistant.content,
                 force: true,
                 user_input: text,
+                module5_history: (chatsRef.current.f5 ?? []).map((m) => ({ role: m.role, content: m.content })),
                 userId: currentUser?.id,
               }),
             })
@@ -2501,7 +2617,6 @@ function App() {
               },
               () => {},
             )
-            setF5Done(true)
             f5TimingRef.current.leftAt = Date.now()
             void persistF5Analytics()
           } catch (e) {
@@ -2530,11 +2645,16 @@ function App() {
             module4_session_id: module4SessionId,
             user_input: text,
             force: true,
+            module5_history: (chatsRef.current.f5 ?? []).map((m) => ({ role: m.role, content: m.content })),
             userId: currentUser?.id,
           }),
         })
         if (!resp.ok) throw new Error(await resp.text().catch(() => ''))
-        setChats((prev) => ({ ...prev, f5: [...(prev.f5 ?? []), { role: 'assistant', content: '' }] }))
+        // `f5` 已在开头追加了用户消息，这里只追加 assistant 占位，确保 streaming delta 追加到最后一条 assistant。
+        setChats((prev) => ({
+          ...prev,
+          f5: [...(prev.f5 ?? []), { role: 'assistant', content: '' }],
+        }))
         await readSse(
           resp,
           (delta) => {
@@ -2549,7 +2669,6 @@ function App() {
           () => {},
         )
         // module5 session_id currently not used on client
-        setF5Done(true)
         f5TimingRef.current.leftAt = Date.now()
         void persistF5Analytics()
         return
@@ -2594,7 +2713,7 @@ function App() {
               key === 'f1'
                 ? '请求失败：请确认你已启动后端 `start_ecm_backend.bat`，并在 `ecm_backend/.env` 设置 `DEEPSEEK_API_KEY`。'
                 : key === 'f2'
-                  ? '请求失败：请确认你已启动后端 `start_ecm_backend.bat`（端口 9000），并完成 Function 1 的确认。'
+                  ? '请求失败：Function 2 会话可能已过期。请稍后重试或重新开始 Function 2。'
                 : '请求失败：请确认你已在项目根目录创建 `.env` 并设置 `DEEPSEEK_API_KEY`，然后重新启动开发服务。',
           },
         ],
@@ -2711,6 +2830,12 @@ function App() {
                 type="password"
                 value={loginForm.password}
                 onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+              />
+              <input
+                style={{ fontSize: 12, padding: '2px 4px', marginLeft: 8 }}
+                placeholder="验证码"
+                value={loginForm.captcha}
+                onChange={(e) => setLoginForm((prev) => ({ ...prev, captcha: e.target.value }))}
               />
               <button type="button" onClick={() => void handleLogin()}>
                 登录 / 注册
@@ -3073,7 +3198,8 @@ function App() {
                     className="primary"
                     onClick={() => {
                       if (sendingKey !== null || f4Confirmed) return
-                      if (!module1SessionId || !module2SessionId) return
+                      // module1_session_id 是后端内存态；这里允许使用前端“已确认的问题定义”文本兜底。
+                      if (!module2SessionId) return
                       void (async () => {
                         setErrors((prev) => ({ ...prev, f4: null }))
                         setSendingKey('f4')
@@ -3088,7 +3214,9 @@ function App() {
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                               module1_session_id: module1SessionId,
+                              module1_definition: module1DefinitionRef.current ?? module1Definition ?? '',
                               module2_session_id: module2SessionId,
+                              module2_history: (chatsRef.current.f2 ?? []).map((m) => ({ role: m.role, content: m.content })),
                               force: true,
                               user_input: regenUserInput,
                               userId: currentUser?.id,
@@ -3138,7 +3266,7 @@ function App() {
                         }
                       })()
                     }}
-                    disabled={sendingKey !== null || f4Confirmed || !module1SessionId || !module2SessionId}
+                    disabled={sendingKey !== null || f4Confirmed || !module2SessionId}
                     title="重新生成 Function 4 报告（保持等待确认，可继续追问/修订）"
                   >
                     重新生成

@@ -142,6 +142,11 @@
   overflow: hidden;
 }
 
+.dashShell.studentApp .cardWide {
+  height: 600px; /* Function 1: 300px -> 600px (翻倍) */
+  overflow: hidden;
+}
+
 .mentorStudentProfileGrid {
   display: grid;
   grid-template-columns: 1fr 1.15fr;

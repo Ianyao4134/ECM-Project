@@ -1,0 +1,15 @@
+# Render Blueprint (https://render.com): Web Service from Dockerfile.
+# After push to GitHub, connect repo → New Blueprint → select render.yaml, set DEEPSEEK_API_KEY.
+
+services:
+  - type: web
+    name: ecm-explore-tutor
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEEPSEEK_API_KEY
+        sync: false

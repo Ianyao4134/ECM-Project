@@ -13,6 +13,8 @@ RUN apt-get update \
     pkg-config \
     libfreetype6-dev \
     libpng-dev \
+    fontconfig \
+    fonts-noto-cjk \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

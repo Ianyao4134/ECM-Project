@@ -54,9 +54,13 @@ if exist "runtime\ecm_backend.exe" (
   goto :SKIP_PY
 )
 
+REM Prefer 3.11: numpy/matplotlib wheels are reliable; py -3 may pick 3.15 and break pip install.
 set "PYEXE="
-py -3 -c "import sys; print(sys.executable)" >"%TEMP%\ecm_setup_py.txt" 2>nul
-if not errorlevel 1 set /p PYEXE=<"%TEMP%\ecm_setup_py.txt"
+for /f "delims=" %%P in ('py -3.11 -c "import sys; print(sys.executable)" 2^>nul') do set "PYEXE=%%P"
+if not defined PYEXE (
+  py -3 -c "import sys; print(sys.executable)" >"%TEMP%\ecm_setup_py.txt" 2>nul
+  if not errorlevel 1 set /p PYEXE=<"%TEMP%\ecm_setup_py.txt"
+)
 if defined PYEXE goto :HAVE_PY
 
 python -c "import sys; print(sys.executable)" >"%TEMP%\ecm_setup_py.txt" 2>nul
@@ -70,12 +74,12 @@ if defined PYEXE (
 
 echo [SETUP] Python not found.
 if "%WINGET_OK%"=="0" (
-  echo [ERROR] winget is not available. Install Python 3 from https://www.python.org/downloads/ ^(check "Add to PATH"^) then run setup.bat again.
+  echo [ERROR] winget is not available. Install Python 3.11 x64 from https://www.python.org/downloads/ ^(check "Add to PATH"^) then run setup.bat again.
   pause
   exit /b 1
 )
-echo [SETUP] Installing Python 3.12 via winget...
-winget install --id Python.Python.3.12 -e --accept-package-agreements --accept-source-agreements
+echo [SETUP] Installing Python 3.11 via winget ^(recommended for numpy/matplotlib^)...
+winget install --id Python.Python.3.11 -e --accept-package-agreements --accept-source-agreements
 if errorlevel 1 (
   echo [ERROR] winget failed to install Python.
   pause
@@ -84,8 +88,11 @@ if errorlevel 1 (
 echo [INFO] If Python is still not found, close this window, open a new terminal, and run setup.bat again.
 
 set "PYEXE="
-py -3 -c "import sys; print(sys.executable)" >"%TEMP%\ecm_setup_py.txt" 2>nul
-if not errorlevel 1 set /p PYEXE=<"%TEMP%\ecm_setup_py.txt"
+for /f "delims=" %%P in ('py -3.11 -c "import sys; print(sys.executable)" 2^>nul') do set "PYEXE=%%P"
+if not defined PYEXE (
+  py -3 -c "import sys; print(sys.executable)" >"%TEMP%\ecm_setup_py.txt" 2>nul
+  if not errorlevel 1 set /p PYEXE=<"%TEMP%\ecm_setup_py.txt"
+)
 if not defined PYEXE (
   python -c "import sys; print(sys.executable)" >"%TEMP%\ecm_setup_py.txt" 2>nul
   if not errorlevel 1 set /p PYEXE=<"%TEMP%\ecm_setup_py.txt"

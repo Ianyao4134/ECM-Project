@@ -8,6 +8,7 @@ import json
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 import io
 import zipfile
 from html import escape as _html_escape
@@ -15,6 +16,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 import base64
 import hmac
+from collections import Counter
 
 from .config import settings
 from .ecm_engine import run_ecm
@@ -35,6 +37,7 @@ from .analytics_store import (
     get_f4_analytics,
     upsert_f5_analytics,
     get_f5_analytics,
+    list_all_analytics_for_user,
 )
 from .projects_store import (
     create_user,
@@ -55,6 +58,7 @@ from .audit_store import (
     list_audit,
     analytics_table_counts,
     list_recent_analytics_rows,
+    list_audit_for_user,
 )
 from .config import settings as _settings_for_prompts
 from .sessions import (
@@ -497,6 +501,104 @@ def _sanitize_analysis_text(text: str) -> str:
     return text.strip()
 
 
+def _mentor_performance_bundle(user_id: str) -> dict[str, Any]:
+    uid = _safe_str(user_id).strip()
+    analytics = list_all_analytics_for_user(uid)
+    raw_prof = get_profile(uid)
+    profile_summary: dict[str, Any] = {}
+    for k, v in raw_prof.items():
+        if k == "persona_transcript":
+            if isinstance(v, list):
+                profile_summary["persona_transcript_turns"] = len(v)
+            continue
+        profile_summary[k] = v
+
+    projects = list_projects(uid)
+    projects_summary: list[dict[str, Any]] = []
+    total_dialogues = 0
+    for p in projects:
+        if not isinstance(p, dict):
+            continue
+        dialogs = p.get("dialogues")
+        dc = len(dialogs) if isinstance(dialogs, list) else 0
+        total_dialogues += dc
+        projects_summary.append(
+            {
+                "id": str(p.get("id") or ""),
+                "name": str(p.get("name") or ""),
+                "dialogue_count": dc,
+                "updatedAt": p.get("updatedAt"),
+                "createdAt": p.get("createdAt"),
+            }
+        )
+
+    def _ms_day_key(ms: int) -> str:
+        if ms <= 0:
+            return ""
+        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    daily: Counter[str] = Counter()
+    module_activity_days: dict[str, Counter[str]] = {k: Counter() for k in analytics}
+    for mod, rows in analytics.items():
+        for r in rows:
+            ms = int(r.get("updated_at") or 0)
+            d = _ms_day_key(ms)
+            if d:
+                daily[d] += 1
+                module_activity_days[mod][d] += 1
+
+    recent_access = list_audit_for_user(user_id=uid, limit=100)
+    for a in recent_access:
+        ms = int(a.get("ts") or 0)
+        d = _ms_day_key(ms)
+        if d:
+            daily[d] += 1
+
+    daily_sorted = [{"date": d, "events": int(daily[d])} for d in sorted(daily.keys())]
+
+    def _avg_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
+        sums: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for r in rows:
+            m = r.get("metrics")
+            if not isinstance(m, dict):
+                continue
+            for nk, nv in m.items():
+                if isinstance(nv, bool):
+                    continue
+                if isinstance(nv, (int, float)):
+                    sums[nk] = sums.get(nk, 0.0) + float(nv)
+                    counts[nk] = counts.get(nk, 0) + 1
+        return {k: round(sums[k] / counts[k], 4) for k in sums if counts.get(k, 0) > 0}
+
+    metrics_avg_by_module = {mod: _avg_metrics(rows) for mod, rows in analytics.items()}
+    module_counts = {mod: len(rows) for mod, rows in analytics.items()}
+    module_daily_top = {
+        m: [{"date": d, "events": int(c)} for d, c in module_activity_days[m].most_common(14)]
+        for m in module_activity_days
+    }
+    chart: dict[str, Any] = {
+        "module_row_counts": module_counts,
+        "metrics_avg_by_module": metrics_avg_by_module,
+        "daily_total_events": daily_sorted,
+        "module_daily_top": module_daily_top,
+    }
+
+    return {
+        "user_id": uid,
+        "profile": profile_summary,
+        "projects_summary": {
+            "project_count": len(projects_summary),
+            "dialogue_count_total": total_dialogues,
+            "projects": projects_summary,
+        },
+        "analytics_by_module": analytics,
+        "chart": chart,
+        "recent_access_log": recent_access,
+        "generated_at_ms": int(time.time() * 1000),
+    }
+
+
 def _parse_score_reference(text: str) -> tuple[int | None, str | None]:
     if not text:
         return None, None
@@ -685,6 +787,91 @@ def admin_analytics_preview(module: str):
     except ValueError:
         lim = 30
     return jsonify({"module": module, "items": list_recent_analytics_rows(module=module, limit=lim)})
+
+
+@app.get("/ecm/mentor/student_performance_bundle")
+def mentor_student_performance_bundle():
+    user_id = _safe_str(request.args.get("userId") or request.args.get("user_id") or "").strip()
+    if not user_id:
+        return jsonify({"error": "userId is required"}), 400
+    return jsonify(_mentor_performance_bundle(user_id))
+
+
+@app.get("/ecm/mentor/student_performance_charts")
+def mentor_student_performance_charts():
+    """
+    Matplotlib PNG figures + ordered timeline metadata (dialogue order, event sequence).
+    """
+    user_id = _safe_str(request.args.get("userId") or request.args.get("user_id") or "").strip()
+    if not user_id:
+        return jsonify({"error": "userId is required"}), 400
+    analytics = list_all_analytics_for_user(user_id)
+    try:
+        from .mentor_perf_charts import build_timeline_events_payload, render_performance_figures_png
+
+        timeline = build_timeline_events_payload(analytics)
+        figures = render_performance_figures_png(analytics)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"timeline": timeline, "figures": figures})
+
+
+@app.post("/ecm/mentor/student_behavior_analysis")
+def mentor_student_behavior_analysis():
+    if not settings.deepseek_api_key:
+        return (
+            jsonify({"error": "Missing DEEPSEEK_API_KEY. Create .env in ecm_backend and set it."}),
+            500,
+        )
+    body = request.get_json(silent=True) or {}
+    user_id = _safe_str(body.get("userId") or body.get("user_id") or "").strip()
+    if not user_id:
+        return jsonify({"error": "userId is required"}), 400
+    bundle = _mentor_performance_bundle(user_id)
+    system_prompt = load_prompt("mentor_behavior_theory.txt")
+
+    # For DeepSeek: provide structured chart-ready time-series context (no PNGs).
+    try:
+        from .mentor_perf_charts import build_deepseek_charts_context
+
+        analytics_for_charts = bundle.get("analytics_by_module") if isinstance(bundle.get("analytics_by_module"), dict) else {}
+        charts_context = build_deepseek_charts_context(analytics_for_charts)
+    except Exception:
+        charts_context = {"error": "build_deepseek_charts_context failed"}
+
+    deepseek_obj = {
+        "profile": bundle.get("profile") or {},
+        "projects_summary": bundle.get("projects_summary") or {},
+        # Aggregated daily/module stats (already used in UI).
+        "chart": bundle.get("chart") or {},
+        # Chart-derived time-series context: ordered events + top metric trends.
+        "charts_deepseek_context": charts_context,
+        "recent_access_log": bundle.get("recent_access_log") or [],
+    }
+
+    payload = json.dumps(deepseek_obj, ensure_ascii=False)
+    max_chars = 100_000
+    truncated = len(payload) > max_chars
+    if truncated:
+        payload = payload[:max_chars] + "\n... [truncated for model context]"
+    user_input = (
+        "以下 JSON 包含学生在 ECM 中的跨模块表现摘要（可能已截断）。请按你的系统指令输出中文 Markdown 解读。\n"
+        "重要：请务必把解读重点放在 charts_deepseek_context 这部分的“对话先后排序的时间序列图表数据”（模块推进、指标趋势、体量投入 proxy）。\n\n"
+        + payload
+    )
+    try:
+        resp = asyncio.run(
+            call_deepseek(
+                system_prompt=system_prompt,
+                user_input=user_input,
+                max_tokens=2800,
+                temperature=0.25,
+            )
+        )
+        analysis = extract_assistant_content(resp)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"analysis": (analysis or "").strip(), "payload_truncated": truncated})
 
 
 @app.post("/ecm/mentor/analyze")

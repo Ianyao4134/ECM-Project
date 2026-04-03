@@ -22,7 +22,11 @@ if exist "runtime\ecm_backend.exe" (
 )
 
 set "SYS_PY="
-for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "SYS_PY=%%P"
+REM Prefer Python 3.11 to avoid source-build failures on newer Python (e.g. 3.15).
+for /f "delims=" %%P in ('py -3.11 -c "import sys; print(sys.executable)" 2^>nul') do set "SYS_PY=%%P"
+if not defined SYS_PY (
+  for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "SYS_PY=%%P"
+)
 if not defined SYS_PY (
   for /f "delims=" %%P in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "SYS_PY=%%P"
 )

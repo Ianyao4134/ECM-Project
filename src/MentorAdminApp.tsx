@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import './App.css'
 
 type Role = 'user' | 'assistant'
@@ -20,6 +21,53 @@ type LoadedProjectState = {
   }
 }
 
+type PerfFigure = {
+  title?: string
+  mime?: string
+  data_base64?: string
+  width_px?: number
+  height_px?: number
+}
+
+type TimelinePayload = {
+  event_count?: number
+  events_truncated?: boolean
+  dialogue_order?: string[]
+  events?: Array<{
+    seq?: number
+    ts_ms?: number
+    module?: string
+    dialogue_id?: string
+    project_id?: string
+    conversation_id?: string
+  }>
+}
+
+type PerformanceBundle = {
+  user_id?: string
+  chart?: {
+    module_row_counts?: Record<string, number>
+    metrics_avg_by_module?: Record<string, Record<string, number>>
+    daily_total_events?: { date: string; events: number }[]
+    module_daily_top?: Record<string, { date: string; events: number }[]>
+  }
+  analytics_by_module?: Record<string, unknown[]>
+  recent_access_log?: Array<{
+    ts?: number
+    path?: string
+    method?: string
+    status_code?: number
+    ip?: string
+    query?: string
+  }>
+  projects_summary?: {
+    project_count?: number
+    dialogue_count_total?: number
+    projects?: unknown[]
+  }
+  generated_at_ms?: number
+}
+
 type StudentProfile = {
   age?: string
   stage?: string
@@ -31,6 +79,41 @@ type StudentProfile = {
   learning_habits?: string
   persona_summary?: string
   persona_transcript?: { role: 'user' | 'assistant'; content: string }[]
+}
+
+const metricKeyToCn: Record<string, string> = {
+  // Common / F1
+  avg_ai_msg_length: 'AI消息长度均值（字符）',
+  avg_user_msg_length: '学生消息长度均值（字符）',
+  ai_response_seconds_avg: 'AI回应时长均值（秒）',
+  module_dwell_seconds: '模块停留时长均值（秒）',
+  turn_count: '对话轮次均值',
+  user_confirm_count: '确认次数均值',
+  user_copy_example_count: '复制/范例使用次数均值',
+  user_option_select_count: '选项选择次数均值',
+  user_question_count: '提问次数均值',
+  user_thinking_seconds_avg: '思考时长均值（秒）',
+  thinking_seconds_avg: '思考时长均值（秒）',
+
+  // F3
+  avg_similarity: '卡片相似度均值',
+  avg_update_depth: '更新深度均值',
+  card_count: '卡片数量均值',
+  edit_rate: '编辑率',
+  edited_card_count: '已编辑卡片数量均值',
+  user_edit_count: '用户编辑次数均值',
+  star_rate: '标星率',
+  send_rate: '发送率',
+
+  // F4
+  download_count: '下载次数',
+  report_modification_count: '报告修改次数',
+
+  // F5
+  click_count: '点击次数',
+  new_count: '新增次数',
+  note_char_count: '笔记字符数',
+  note_edit_count: '笔记编辑次数',
 }
 
 function MentorAdminApp() {
@@ -70,6 +153,15 @@ function MentorAdminApp() {
   const [analysisLoading, setAnalysisLoading] = useState<Record<string, boolean>>({})
   const [analysisError, setAnalysisError] = useState<Record<string, string | null>>({})
   const [analysisResult, setAnalysisResult] = useState<Record<string, string>>({})
+
+  const [perfBundle, setPerfBundle] = useState<PerformanceBundle | null>(null)
+  const [perfCharts, setPerfCharts] = useState<{ timeline: TimelinePayload; figures: PerfFigure[] } | null>(null)
+  const [perfLoading, setPerfLoading] = useState(false)
+  const [perfError, setPerfError] = useState<string | null>(null)
+  const [perfChartsError, setPerfChartsError] = useState<string | null>(null)
+  const [behaviorLoading, setBehaviorLoading] = useState(false)
+  const [behaviorError, setBehaviorError] = useState<string | null>(null)
+  const [behaviorMarkdown, setBehaviorMarkdown] = useState<string | null>(null)
 
   useEffect(() => {
     if (!currentUser) return
@@ -175,6 +267,93 @@ function MentorAdminApp() {
       }
     })()
   }, [selectedUserId])
+
+  useEffect(() => {
+    setPerfBundle(null)
+    setPerfCharts(null)
+    setPerfError(null)
+    setPerfChartsError(null)
+    setBehaviorMarkdown(null)
+    setBehaviorError(null)
+  }, [selectedUserId])
+
+  const loadPerformanceBundle = async () => {
+    if (!selectedUserId) return
+    setPerfLoading(true)
+    setPerfError(null)
+    setPerfChartsError(null)
+    try {
+      const uid = encodeURIComponent(selectedUserId)
+      const [bundleResp, chartsResp] = await Promise.all([
+        fetch(`/ecm/mentor/student_performance_bundle?userId=${uid}`),
+        fetch(`/ecm/mentor/student_performance_charts?userId=${uid}`),
+      ])
+      const bundleData: unknown = await bundleResp.json().catch(() => null)
+      if (!bundleResp.ok) {
+        const msg =
+          typeof bundleData === 'object' && bundleData && 'error' in bundleData
+            ? String((bundleData as { error?: unknown }).error ?? '')
+            : '加载表现数据失败'
+        throw new Error(msg)
+      }
+      setPerfBundle(bundleData && typeof bundleData === 'object' ? (bundleData as PerformanceBundle) : null)
+
+      const chartsData: unknown = await chartsResp.json().catch(() => null)
+      if (!chartsResp.ok) {
+        const msg =
+          typeof chartsData === 'object' && chartsData && 'error' in chartsData
+            ? String((chartsData as { error?: unknown }).error ?? '')
+            : '生成 Matplotlib 图表失败'
+        setPerfCharts(null)
+        setPerfChartsError(msg)
+      } else if (chartsData && typeof chartsData === 'object' && 'figures' in chartsData) {
+        const c = chartsData as { timeline?: TimelinePayload; figures?: PerfFigure[] }
+        setPerfCharts({
+          timeline: c.timeline ?? {},
+          figures: Array.isArray(c.figures) ? c.figures : [],
+        })
+      } else {
+        setPerfCharts(null)
+      }
+    } catch (e) {
+      setPerfBundle(null)
+      setPerfCharts(null)
+      setPerfError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPerfLoading(false)
+    }
+  }
+
+  const generateBehaviorAnalysis = async () => {
+    if (!selectedUserId) return
+    setBehaviorLoading(true)
+    setBehaviorError(null)
+    try {
+      const resp = await fetch('/ecm/mentor/student_behavior_analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: selectedUserId }),
+      })
+      const data: unknown = await resp.json().catch(() => null)
+      if (!resp.ok) {
+        const msg =
+          typeof data === 'object' && data && 'error' in data
+            ? String((data as { error?: unknown }).error ?? '')
+            : '生成行为学解读失败'
+        throw new Error(msg)
+      }
+      const md =
+        typeof data === 'object' && data && 'analysis' in data
+          ? String((data as { analysis?: unknown }).analysis ?? '')
+          : ''
+      setBehaviorMarkdown(md || '未返回解读内容')
+    } catch (e) {
+      setBehaviorMarkdown(null)
+      setBehaviorError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBehaviorLoading(false)
+    }
+  }
 
   const generateAnalysis = async (functionKey: 'f1' | 'f2' | 'f3' | 'f4' | 'f5') => {
     if (!selectedUserId || !loadedProject) return
@@ -593,6 +772,252 @@ function MentorAdminApp() {
                   ) : null}
                 </div>
               ) : null}
+                </div>
+              </article>
+
+              <article className="card mentorCardWide">
+                <div className="cardTop">
+                  <div className="cardTitle">全量表现数据 · 可视化与行为学解读</div>
+                </div>
+                <div style={{ padding: '0 16px 16px' }}>
+                  {!selectedUserId ? (
+                    <div className="noteHint">请先选择一名学生。</div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          className="analysisPrimary"
+                          onClick={() => void loadPerformanceBundle()}
+                          disabled={perfLoading}
+                        >
+                          {perfLoading ? '加载中…' : '加载该学生全量表现数据'}
+                        </button>
+                        <button type="button" onClick={() => void generateBehaviorAnalysis()} disabled={behaviorLoading}>
+                          {behaviorLoading ? '正在解读中…' : '生成行为学深度解读'}
+                        </button>
+                        <span style={{ fontSize: 12, opacity: 0.75 }}>
+                          加载后将并行生成 Matplotlib 时间序列大图（可滚动查看）；解读需配置 DEEPSEEK_API_KEY。
+                        </span>
+                      </div>
+                      {perfError ? <div className="error">{perfError}</div> : null}
+                      {perfChartsError ? <div className="error">图表：{perfChartsError}</div> : null}
+                      {behaviorError ? <div className="error">{behaviorError}</div> : null}
+                      {perfCharts && (perfCharts.figures?.length ?? 0) > 0 ? (
+                        <div className="mentorPerfChartsBlock">
+                          <div style={{ fontWeight: 650, marginBottom: 8 }}>Python Matplotlib · 时间序列多维可视化</div>
+                          {perfCharts.timeline?.event_count != null ? (
+                            <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
+                              事件总数 {perfCharts.timeline.event_count}
+                              {perfCharts.timeline.events_truncated ? '（时间线表仅展示前若干条）' : ''}
+                              {perfCharts.timeline.dialogue_order && perfCharts.timeline.dialogue_order.length > 0 ? (
+                                <span>
+                                  {' '}
+                                  ｜对话顺序（去重）：{perfCharts.timeline.dialogue_order.slice(0, 8).join(' → ')}
+                                  {perfCharts.timeline.dialogue_order.length > 8 ? ' …' : ''}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {perfCharts.timeline?.events && perfCharts.timeline.events.length > 0 ? (
+                            <div className="mentorPerfTimelineTableWrap">
+                              <table className="mentorPerfTimelineTable">
+                                <thead>
+                                  <tr>
+                                    <th>序号</th>
+                                    <th>时间</th>
+                                    <th>模块</th>
+                                    <th>对话</th>
+                                    <th>项目</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {perfCharts.timeline.events.map((row, idx) => (
+                                    <tr key={`${row.seq}-${idx}`}>
+                                      <td>{row.seq ?? '—'}</td>
+                                      <td>
+                                        {row.ts_ms != null ? new Date(row.ts_ms).toLocaleString() : '—'}
+                                      </td>
+                                      <td>{row.module ? String(row.module).toUpperCase() : '—'}</td>
+                                      <td title={row.dialogue_id}>{row.dialogue_id ? String(row.dialogue_id).slice(0, 14) : '—'}</td>
+                                      <td title={row.project_id}>{row.project_id ? String(row.project_id).slice(0, 10) : '—'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : null}
+                          <div className="mentorPerfChartsScroll">
+                            {perfCharts.figures.map((f, i) => (
+                              <figure key={i} className="mentorPerfFigure">
+                                {f.title ? <figcaption>{f.title}</figcaption> : null}
+                                {f.data_base64 && f.mime ? (
+                                  <img
+                                    src={`data:${f.mime};base64,${f.data_base64}`}
+                                    alt={f.title || `chart-${i}`}
+                                    className="mentorPerfChartImg"
+                                  />
+                                ) : null}
+                              </figure>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {perfBundle ? (
+                        <div className="mentorPerfViz">
+                          {perfBundle.projects_summary ? (
+                            <div style={{ fontSize: 13, marginBottom: 12 }}>
+                              <strong>项目概览：</strong>
+                              项目数 {perfBundle.projects_summary.project_count ?? 0}，对话数{' '}
+                              {perfBundle.projects_summary.dialogue_count_total ?? 0}
+                              {perfBundle.generated_at_ms ? (
+                                <span style={{ opacity: 0.75 }}>
+                                  {' '}
+                                  ｜数据快照 {new Date(perfBundle.generated_at_ms).toLocaleString()}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          {perfBundle.chart?.module_row_counts ? (
+                            <div style={{ marginBottom: 16 }}>
+                              <div style={{ fontWeight: 650, marginBottom: 8 }}>各模块 analytics 记录条数</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {(['f1', 'f2', 'f3', 'f4', 'f5'] as const).map((k) => {
+                                  const counts = perfBundle.chart!.module_row_counts!
+                                  const n = counts[k] ?? 0
+                                  const vals = Object.values(counts).filter((v) => typeof v === 'number') as number[]
+                                  const max = Math.max(1, ...vals)
+                                  const pct = (n / max) * 100
+                                  return (
+                                    <div key={k}>
+                                      <div style={{ fontSize: 12, marginBottom: 2 }}>
+                                        {k.toUpperCase()} · {n} 条
+                                      </div>
+                                      <div style={{ background: 'rgba(0,0,0,0.07)', borderRadius: 4, height: 10 }}>
+                                        <div
+                                          style={{
+                                            width: `${pct}%`,
+                                            height: 10,
+                                            background: 'linear-gradient(90deg, #3d6df0, #6a9cff)',
+                                            borderRadius: 4,
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {perfBundle.chart?.daily_total_events && perfBundle.chart.daily_total_events.length > 0 ? (
+                            <div style={{ marginBottom: 16 }}>
+                              <div style={{ fontWeight: 650, marginBottom: 8 }}>按天活动强度（analytics 更新 + 审计请求，UTC 日期）</div>
+                              <div
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))',
+                                  gap: 6,
+                                  maxHeight: 200,
+                                  overflow: 'auto',
+                                }}
+                              >
+                                {perfBundle.chart.daily_total_events.slice(-40).map((d) => {
+                                  const peak = Math.max(
+                                    1,
+                                    ...perfBundle.chart!.daily_total_events!.map((x) => x.events),
+                                  )
+                                  const h = Math.max(6, (d.events / peak) * 40)
+                                  return (
+                                    <div key={d.date} style={{ textAlign: 'center' }}>
+                                      <div
+                                        title={`${d.date}: ${d.events}`}
+                                        style={{
+                                          height: h,
+                                          margin: '0 auto 4px',
+                                          width: '80%',
+                                          background: '#3d6df0',
+                                          borderRadius: 3,
+                                          opacity: 0.65 + 0.35 * (d.events / peak),
+                                        }}
+                                      />
+                                      <div style={{ fontSize: 10, opacity: 0.8, lineHeight: 1.1 }}>{d.date.slice(5)}</div>
+                                      <div style={{ fontSize: 10, fontWeight: 600 }}>{d.events}</div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {perfBundle.chart?.metrics_avg_by_module &&
+                          Object.keys(perfBundle.chart.metrics_avg_by_module).length > 0 ? (
+                            <div style={{ marginBottom: 16 }}>
+                              <div style={{ fontWeight: 650, marginBottom: 8 }}>各模块 metrics 数值字段均值（有则显示）</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {(['f1', 'f2', 'f3', 'f4', 'f5'] as const).map((k) => {
+                                  const block = perfBundle.chart!.metrics_avg_by_module![k]
+                                  if (!block || Object.keys(block).length === 0) return null
+                                  const keys = Object.keys(block).slice(0, 12)
+                                  return (
+                                    <div key={k}>
+                                      <div style={{ fontSize: 12, fontWeight: 650, marginBottom: 4 }}>{k.toUpperCase()}</div>
+                                      <div style={{ fontSize: 12, opacity: 0.9, lineHeight: 1.5 }}>
+                                        {keys.map((mk) => (
+                                          <span key={mk} style={{ marginRight: 12 }}>
+                                            {metricKeyToCn[mk] ? metricKeyToCn[mk] : mk}: {block[mk]}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {perfBundle.recent_access_log && perfBundle.recent_access_log.length > 0 ? (
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ fontWeight: 650, marginBottom: 6 }}>近期访问轨迹（节选）</div>
+                              <div style={{ overflow: 'auto', maxHeight: 160, fontSize: 11, fontFamily: 'monospace' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                  <thead>
+                                    <tr style={{ textAlign: 'left', opacity: 0.8 }}>
+                                      <th style={{ padding: '2px 6px' }}>时间</th>
+                                      <th style={{ padding: '2px 6px' }}>请求</th>
+                                      <th style={{ padding: '2px 6px' }}>状态</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {perfBundle.recent_access_log.slice(0, 12).map((row, idx) => (
+                                      <tr key={`${row.ts}-${idx}`} style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                                        <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
+                                          {row.ts ? new Date(row.ts).toLocaleString() : '—'}
+                                        </td>
+                                        <td style={{ padding: '4px 6px' }}>
+                                          {row.method} {row.path}
+                                          {row.query ? `?${String(row.query).slice(0, 48)}` : ''}
+                                        </td>
+                                        <td style={{ padding: '4px 6px' }}>{row.status_code ?? '—'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="noteHint">点击「加载该学生全量表现数据」查看图表；可先加载再生成 DeepSeek 行为学解读。</div>
+                      )}
+                      {behaviorMarkdown ? (
+                        <div className="mentorBehaviorMarkdown">
+                          <ReactMarkdown>{behaviorMarkdown}</ReactMarkdown>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </article>
 

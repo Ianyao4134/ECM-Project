@@ -472,3 +472,154 @@ def get_f3_analytics(conversation_id: str) -> dict[str, Any] | None:
         "updated_at": int(row["updated_at"] or 0),
     }
 
+
+def list_all_analytics_for_user(user_id: str) -> dict[str, list[dict[str, Any]]]:
+    """
+    Mentor / owner: all analytics rows for a student (by user_id), safe summaries only (no full history text).
+    """
+    if not user_id:
+        return {"f1": [], "f2": [], "f3": [], "f4": [], "f5": []}
+    out: dict[str, list[dict[str, Any]]] = {"f1": [], "f2": [], "f3": [], "f4": [], "f5": []}
+    with _LOCK:
+        conn = _conn()
+        try:
+            r1 = conn.execute(
+                """
+                SELECT conversation_id, project_id, dialogue_id, updated_at, metrics_json,
+                       length(history_json) AS history_bytes
+                FROM f1_analytics WHERE user_id = ? ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            for r in r1:
+                metrics: dict[str, Any] = {}
+                try:
+                    m = json.loads(r["metrics_json"] or "{}")
+                    if isinstance(m, dict):
+                        metrics = m
+                except Exception:
+                    metrics = {}
+                out["f1"].append(
+                    {
+                        "conversation_id": r["conversation_id"],
+                        "project_id": r["project_id"] or "",
+                        "dialogue_id": r["dialogue_id"] or "",
+                        "updated_at": int(r["updated_at"] or 0),
+                        "metrics": metrics,
+                        "history_payload_bytes": int(r["history_bytes"] or 0),
+                    }
+                )
+
+            r2 = conn.execute(
+                """
+                SELECT conversation_id, project_id, dialogue_id, updated_at, metrics_json,
+                       length(history_json) AS history_bytes
+                FROM f2_analytics WHERE user_id = ? ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            for r in r2:
+                metrics = {}
+                try:
+                    m = json.loads(r["metrics_json"] or "{}")
+                    if isinstance(m, dict):
+                        metrics = m
+                except Exception:
+                    metrics = {}
+                out["f2"].append(
+                    {
+                        "conversation_id": r["conversation_id"],
+                        "project_id": r["project_id"] or "",
+                        "dialogue_id": r["dialogue_id"] or "",
+                        "updated_at": int(r["updated_at"] or 0),
+                        "metrics": metrics,
+                        "history_payload_bytes": int(r["history_bytes"] or 0),
+                    }
+                )
+
+            r3 = conn.execute(
+                """
+                SELECT conversation_id, project_id, dialogue_id, updated_at, metrics_json,
+                       length(note_text) AS note_len, length(cards_json) AS cards_bytes
+                FROM f3_analytics WHERE user_id = ? ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            for r in r3:
+                metrics = {}
+                try:
+                    m = json.loads(r["metrics_json"] or "{}")
+                    if isinstance(m, dict):
+                        metrics = m
+                except Exception:
+                    metrics = {}
+                out["f3"].append(
+                    {
+                        "conversation_id": r["conversation_id"],
+                        "project_id": r["project_id"] or "",
+                        "dialogue_id": r["dialogue_id"] or "",
+                        "updated_at": int(r["updated_at"] or 0),
+                        "metrics": metrics,
+                        "note_char_len": int(r["note_len"] or 0),
+                        "cards_payload_bytes": int(r["cards_bytes"] or 0),
+                    }
+                )
+
+            r4 = conn.execute(
+                """
+                SELECT conversation_id, project_id, dialogue_id, updated_at, metrics_json,
+                       length(report_text) AS report_len
+                FROM f4_analytics WHERE user_id = ? ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            for r in r4:
+                metrics = {}
+                try:
+                    m = json.loads(r["metrics_json"] or "{}")
+                    if isinstance(m, dict):
+                        metrics = m
+                except Exception:
+                    metrics = {}
+                out["f4"].append(
+                    {
+                        "conversation_id": r["conversation_id"],
+                        "project_id": r["project_id"] or "",
+                        "dialogue_id": r["dialogue_id"] or "",
+                        "updated_at": int(r["updated_at"] or 0),
+                        "metrics": metrics,
+                        "report_char_len": int(r["report_len"] or 0),
+                    }
+                )
+
+            r5 = conn.execute(
+                """
+                SELECT conversation_id, project_id, dialogue_id, updated_at, metrics_json,
+                       length(ai_review_text) AS review_len, length(final_note_text) AS final_note_len
+                FROM f5_analytics WHERE user_id = ? ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            for r in r5:
+                metrics = {}
+                try:
+                    m = json.loads(r["metrics_json"] or "{}")
+                    if isinstance(m, dict):
+                        metrics = m
+                except Exception:
+                    metrics = {}
+                out["f5"].append(
+                    {
+                        "conversation_id": r["conversation_id"],
+                        "project_id": r["project_id"] or "",
+                        "dialogue_id": r["dialogue_id"] or "",
+                        "updated_at": int(r["updated_at"] or 0),
+                        "metrics": metrics,
+                        "review_char_len": int(r["review_len"] or 0),
+                        "final_note_char_len": int(r["final_note_len"] or 0),
+                    }
+                )
+        finally:
+            conn.close()
+    return out
+

@@ -207,3 +207,43 @@ def list_recent_analytics_rows(*, module: str, limit: int = 30) -> list[dict[str
         d = {k: r[k] for k in r.keys()}
         result.append(d)
     return result
+
+
+def list_audit_for_user(*, user_id: str, limit: int = 80) -> list[dict[str, Any]]:
+    """Recent /ecm API access rows where JSON or query contained this userId (best-effort)."""
+    if not user_id:
+        return []
+    limit = max(1, min(int(limit), 200))
+    needle = user_id.strip()
+    with _LOCK:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, ts, method, path, query, ip, user_agent, user_id, username, status_code
+                FROM audit_log
+                WHERE user_id = ? OR instr(COALESCE(query, ''), ?) > 0
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (needle, needle, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append(
+            {
+                "id": r["id"],
+                "ts": r["ts"],
+                "method": r["method"],
+                "path": r["path"],
+                "query": r["query"] or "",
+                "ip": r["ip"] or "",
+                "user_agent": r["user_agent"] or "",
+                "user_id": r["user_id"] or "",
+                "username": r["username"] or "",
+                "status_code": r["status_code"],
+            }
+        )
+    return out

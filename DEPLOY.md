@@ -13,8 +13,18 @@
 | 变量 | 说明 |
 |------|------|
 | `DEEPSEEK_API_KEY` | DeepSeek API Key（与本地 `.env` 相同） |
+| `ECM_ADMIN_SECRET`（可选） | 仅你使用的审计总览：浏览器打开 `https://你的域名/audit-console`，密钥与此变量一致 |
 
 云平台一般会注入 `PORT`（对外监听端口），**不要**在面板里手动改 `ECM_BACKEND_URL`（容器内 Python 固定在 `127.0.0.1:9000`）。
+
+### 审计总览（仅部署者）
+
+1. 在云平台环境变量中设置较长的随机字符串：`ECM_ADMIN_SECRET=...`
+2. 重新部署
+3. 浏览器访问：`https://你的域名/audit-console`
+4. 在页面输入同一串密钥（会保存在本机 `sessionStorage`，勿在公共电脑使用）
+
+可查看：最近 `/ecm/*` 请求（含客户端 IP、`userId`/登录用户名）、用户列表（不含密码）、项目列表、Analytics 表行数与样本行、笔记区元数据统计。
 
 ## 2. 用 Docker 一键部署（推荐）
 

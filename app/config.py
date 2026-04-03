@@ -19,6 +19,9 @@ class Settings:
     prompts_dir: str = os.getenv("ECM_PROMPTS_DIR", os.path.join(os.getcwd(), "prompts"))
     data_dir: str = os.getenv("ECM_DATA_DIR", os.path.join(os.getcwd(), "data"))
 
+    # Owner-only audit console (set in production). Empty = admin API disabled.
+    ecm_admin_secret: str | None = os.getenv("ECM_ADMIN_SECRET")
+
 
 settings = Settings()
 

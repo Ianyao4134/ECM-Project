@@ -5,10 +5,12 @@ import App from './App.tsx'
 import PromptsAdminApp from './PromptsAdminApp.tsx'
 import MentorAdminApp from './MentorAdminApp.tsx'
 import LoginApp from './LoginApp.tsx'
+import AdminAuditApp from './AdminAuditApp.tsx'
 
 const path = window.location.pathname
 const isPromptsAdmin = path.startsWith('/prompts-admin')
 const isMentorAdmin = path.startsWith('/mentor-admin')
+const isAuditConsole = path.startsWith('/audit-console')
 const isLogin = path === '/' || path === '/login'
 const isStudent = path.startsWith('/student')
 
@@ -18,6 +20,8 @@ createRoot(document.getElementById('root')!).render(
       <PromptsAdminApp />
     ) : isMentorAdmin ? (
       <MentorAdminApp />
+    ) : isAuditConsole ? (
+      <AdminAuditApp />
     ) : isLogin ? (
       <LoginApp />
     ) : isStudent ? (

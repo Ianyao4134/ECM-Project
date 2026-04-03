@@ -14,6 +14,7 @@ from html import escape as _html_escape
 from typing import Any
 import xml.etree.ElementTree as ET
 import base64
+import hmac
 
 from .config import settings
 from .ecm_engine import run_ecm
@@ -42,10 +43,18 @@ from .projects_store import (
     list_dialogues,
     load_dialogue,
     load_project,
+    load_projects,
     load_users,
     save_dialogue,
     save_project,
     upsert_user,
+)
+from .audit_store import (
+    init_audit_db,
+    append_audit_row,
+    list_audit,
+    analytics_table_counts,
+    list_recent_analytics_rows,
 )
 from .config import settings as _settings_for_prompts
 from .sessions import (
@@ -68,6 +77,52 @@ from .sessions import (
 app = Flask("ecm-thinking-engine")
 init_analytics_db()
 init_module4_sessions_db()
+init_audit_db()
+
+
+def _client_ip() -> str:
+    xff = (request.headers.get("X-Forwarded-For") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()[:128]
+    return (request.remote_addr or "")[:128]
+
+
+def _audit_extract_identity() -> tuple[str, str]:
+    uid = (request.args.get("userId") or request.args.get("user_id") or "").strip()
+    uname = ""
+    body = request.get_json(silent=True)
+    if isinstance(body, dict):
+        uid = uid or str(body.get("userId") or body.get("user_id") or "").strip()
+        uname = str(body.get("username") or "").strip()
+    return uid[:128], uname[:128]
+
+
+@app.after_request
+def _audit_after(response: Response):
+    try:
+        p = request.path or ""
+        if not p.startswith("/ecm/"):
+            return response
+        if p.startswith("/ecm/admin"):
+            return response
+        if request.method == "OPTIONS":
+            return response
+        uid, uname = _audit_extract_identity()
+        q = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
+        ua = (request.headers.get("User-Agent") or "")[:512]
+        append_audit_row(
+            method=request.method,
+            path=p,
+            query=q,
+            ip=_client_ip(),
+            user_agent=ua,
+            user_id=uid,
+            username=uname,
+            status_code=response.status_code,
+        )
+    except Exception:
+        pass
+    return response
 
 
 @app.errorhandler(Exception)
@@ -514,6 +569,122 @@ def auth_register():
             return jsonify({"error": msg}), 409
         return jsonify({"error": msg}), 400
     return jsonify({"id": user["id"], "username": user["username"]})
+
+
+def _require_admin():
+    sec = (settings.ecm_admin_secret or "").strip()
+    if not sec:
+        return jsonify({"error": "Admin not configured (set ECM_ADMIN_SECRET)"}), 503
+    got = (request.headers.get("X-ECM-Admin-Secret") or "").strip()
+    if len(got) != len(sec) or not hmac.compare_digest(got.encode("utf-8"), sec.encode("utf-8")):
+        return jsonify({"error": "Unauthorized"}), 401
+    return None
+
+
+@app.get("/ecm/admin/ping")
+def admin_ping():
+    err = _require_admin()
+    if err:
+        return err
+    return jsonify({"ok": True})
+
+
+@app.get("/ecm/admin/overview")
+def admin_overview():
+    err = _require_admin()
+    if err:
+        return err
+    users = load_users()
+    projects = load_projects()
+    safe_users: list[dict[str, Any]] = []
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        safe_users.append({"id": str(u.get("id") or ""), "username": str(u.get("username") or "")})
+    return jsonify(
+        {
+            "users_count": len(safe_users),
+            "projects_count": len(projects) if isinstance(projects, list) else 0,
+            "users": safe_users,
+            "analytics_counts": analytics_table_counts(),
+            "recent_audit": list_audit(limit=80, offset=0),
+        }
+    )
+
+
+@app.get("/ecm/admin/audit")
+def admin_audit_list():
+    err = _require_admin()
+    if err:
+        return err
+    try:
+        lim = int(request.args.get("limit") or 100)
+    except ValueError:
+        lim = 100
+    try:
+        off = int(request.args.get("offset") or 0)
+    except ValueError:
+        off = 0
+    return jsonify({"items": list_audit(limit=lim, offset=off)})
+
+
+@app.get("/ecm/admin/projects")
+def admin_projects_list():
+    err = _require_admin()
+    if err:
+        return err
+    projects = load_projects()
+    out: list[dict[str, Any]] = []
+    if isinstance(projects, list):
+        for p in projects:
+            if not isinstance(p, dict):
+                continue
+            ds = p.get("dialogues")
+            dc = len(ds) if isinstance(ds, list) else 0
+            out.append(
+                {
+                    "id": p.get("id"),
+                    "userId": p.get("userId"),
+                    "name": p.get("name"),
+                    "createdAt": p.get("createdAt"),
+                    "updatedAt": p.get("updatedAt"),
+                    "dialogue_count": dc,
+                }
+            )
+    return jsonify({"items": out})
+
+
+@app.get("/ecm/admin/notes")
+def admin_notes_summary():
+    err = _require_admin()
+    if err:
+        return err
+    n = load_notes()
+    topic = str(n.get("topic") or "")
+    tags = n.get("tags") if isinstance(n.get("tags"), list) else []
+    quotes = n.get("quotes") if isinstance(n.get("quotes"), list) else []
+    hooks = n.get("hooks") if isinstance(n.get("hooks"), list) else []
+    return jsonify(
+        {
+            "topic_len": len(topic),
+            "tags_count": len(tags),
+            "quotes_count": len(quotes),
+            "hooks_count": len(hooks),
+            "topic_preview": topic[:800],
+        }
+    )
+
+
+@app.get("/ecm/admin/analytics/<module>")
+def admin_analytics_preview(module: str):
+    err = _require_admin()
+    if err:
+        return err
+    try:
+        lim = int(request.args.get("limit") or 30)
+    except ValueError:
+        lim = 30
+    return jsonify({"module": module, "items": list_recent_analytics_rows(module=module, limit=lim)})
 
 
 @app.post("/ecm/mentor/analyze")

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c magenta,cyan \"nodemon --watch server --ext js,mjs,cjs,json --signal SIGTERM server/index.js\" \"vite --host 127.0.0.1 --port 5173\"",
+    "dev": "concurrently -k -n server,web,ecm -c magenta,cyan,green \"nodemon --watch server --ext js,mjs,cjs,json --signal SIGTERM server/index.js\" \"vite --host 127.0.0.1 --port 5173\" \"node scripts/run-ecm-dev.mjs\"",
     "dev:web": "vite --host 127.0.0.1 --port 5173",
     "dev:server": "node server/index.js",
     "build": "tsc -b && vite build",

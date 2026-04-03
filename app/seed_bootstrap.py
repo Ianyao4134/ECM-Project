@@ -30,6 +30,30 @@ _SEED_PROJECT = "00000000-0000-4000-8000-000000000002"
 _SEED_DIALOGUE = "00000000-0000-4000-8000-000000000003"
 _TS = 1730000000000
 
+# Docker: COPY data /app/_baked_data — used when ECM_DATA_DIR is an empty volume.
+_BAKED_DATA_DIR = os.path.normpath(os.path.join(os.getcwd(), "_baked_data"))
+
+
+def restore_baked_data_if_empty() -> None:
+    """Copy _baked_data -> ECM_DATA_DIR when users.json is missing (e.g. empty Railway volume)."""
+    v = (os.getenv("ECM_SKIP_BAKED_RESTORE") or "").strip().lower()
+    if v in ("1", "true", "yes"):
+        return
+    baked = _BAKED_DATA_DIR
+    if not os.path.isdir(baked):
+        return
+    dst = settings.data_dir
+    users_dst = os.path.join(dst, "users.json")
+    if os.path.isfile(users_dst):
+        return
+    os.makedirs(dst, exist_ok=True)
+    for name in sorted(os.listdir(baked)):
+        if name.startswith("."):
+            continue
+        src = os.path.join(baked, name)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(dst, name))
+
 
 def _seed_dir() -> str:
     return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "seed", "data"))

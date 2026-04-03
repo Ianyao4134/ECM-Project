@@ -7,24 +7,10 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
-import numpy as np
-from matplotlib import colormaps
-from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.gridspec import GridSpec
-
-
-def _zh_rc() -> None:
-    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
 
 
 def _flatten_and_order_events(analytics: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -158,25 +144,34 @@ def _feature_key_to_cn(feature_key: str) -> str:
     return f"{mod.upper()} · 未知指标" if mod else "未知指标"
 
 
-def _matrix_for_heatmap(events: list[dict[str, Any]], keys: list[str]) -> tuple[np.ndarray, list[str]]:
+def _matrix_for_heatmap(events: list[dict[str, Any]], keys: list[str]) -> tuple[list[list[float]], list[str]]:
+    """2D list for imshow; no NumPy import (avoids broken np multiarray on some Windows venvs)."""
     if not events or not keys:
-        return np.zeros((0, 0)), []
-    raw = np.zeros((len(keys), len(events)), dtype=float)
+        return [], []
+    n_row, n_col = len(keys), len(events)
+    raw: list[list[float]] = [[float("nan")] * n_col for _ in range(n_row)]
     for j, e in enumerate(events):
         for i, k in enumerate(keys):
-            raw[i, j] = float(e["features"].get(k, np.nan))
-    out = raw.copy()
-    for i in range(out.shape[0]):
-        row = out[i, :]
-        mask = np.isfinite(row)
-        if not np.any(mask):
+            v = e["features"].get(k)
+            try:
+                raw[i][j] = float(v) if v is not None else float("nan")
+            except (TypeError, ValueError):
+                raw[i][j] = float("nan")
+    out: list[list[float]] = [row[:] for row in raw]
+    for i in range(n_row):
+        row = out[i]
+        finite = [x for x in row if math.isfinite(x)]
+        if not finite:
             continue
-        lo, hi = np.nanmin(row[mask]), np.nanmax(row[mask])
-        if hi > lo:
-            out[i, mask] = (row[mask] - lo) / (hi - lo)
-        else:
-            out[i, mask] = 0.5
-    out = np.nan_to_num(out, nan=0.0)
+        lo, hi = min(finite), max(finite)
+        for j in range(n_col):
+            x = row[j]
+            if not math.isfinite(x):
+                out[i][j] = 0.0
+            elif hi > lo:
+                out[i][j] = (x - lo) / (hi - lo)
+            else:
+                out[i][j] = 0.5
     return out, keys
 
 
@@ -226,7 +221,7 @@ def build_deepseek_charts_context(
                 continue
             try:
                 fv = float(v)
-                values[k] = fv if np.isfinite(fv) else None
+                values[k] = fv if math.isfinite(fv) else None
             except Exception:
                 values[k] = None
         series.append(
@@ -250,13 +245,64 @@ def build_deepseek_charts_context(
     }
 
 
-def render_performance_figures_png(
-    analytics: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    """
-    Returns list of { title, mime, data_base64, width_px, height_px }.
-    """
-    _zh_rc()
+def _placeholder_chart_pngs(detail: str) -> list[dict[str, Any]]:
+    """When Matplotlib/NumPy DLLs fail (common on Windows), still return a readable PNG."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return [
+            {
+                "title": "图表不可用",
+                "mime": "text/plain",
+                "data_base64": "",
+                "width_px": 0,
+                "height_px": 0,
+                "error_text": detail,
+            }
+        ]
+
+    w, h = 960, 520
+    img = Image.new("RGB", (w, h), "#ffffff")
+    dr = ImageDraw.Draw(img)
+    lines = [
+        "Chart engine unavailable (NumPy / Matplotlib DLL on Windows).",
+        "Run: scripts\\fix_numpy_matplotlib_win.bat",
+        "Or install: Microsoft Visual C++ Redistributable x64.",
+        "",
+        detail[:420] if detail else "",
+    ]
+    y = 20
+    for line in lines:
+        if line:
+            dr.text((20, y), line, fill="#1a1a1a")
+        y += 26
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+    return [
+        {
+            "title": "图表不可用（环境修复后可恢复）",
+            "mime": "image/png",
+            "data_base64": b64,
+            "width_px": w,
+            "height_px": h,
+        }
+    ]
+
+
+def _render_performance_figures_mpl(analytics: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    from matplotlib import colormaps
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.gridspec import GridSpec
+
+    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+
     events = _flatten_and_order_events(analytics)
     figures: list[dict[str, Any]] = []
 
@@ -321,7 +367,7 @@ def render_performance_figures_png(
     # --- cumulative volumes ---
     ax2 = fig.add_subplot(gs[1, :])
     ax2.set_facecolor("#ffffff")
-    seq = np.arange(1, len(events) + 1)
+    seq = list(range(1, len(events) + 1))
     vol_keys = [
         ("__volume.history_bytes", "F1/F2 对话载荷 (bytes)", "#ff6b9d"),
         ("__volume.note_chars", "F3 笔记字符", "#67e8f9"),
@@ -333,7 +379,7 @@ def render_performance_figures_png(
         acc = 0.0
         for e in events:
             v = e["features"].get(vk)
-            if v is not None and np.isfinite(v):
+            if v is not None and math.isfinite(float(v)):
                 acc += float(v)
             series.append(acc)
         if max(series, default=0) <= 0:
@@ -351,7 +397,7 @@ def render_performance_figures_png(
     mat, klabels = _matrix_for_heatmap(events, keys)
     ax3 = fig.add_subplot(gs[2, :])
     ax3.set_facecolor("#ffffff")
-    if mat.size > 0:
+    if mat and klabels:
         cmap = LinearSegmentedColormap.from_list("ecm", ["#1e1b4b", "#6366f1", "#fbbf24", "#f472b6"])
         im = ax3.imshow(mat, aspect="auto", cmap=cmap, interpolation="nearest")
         ax3.set_yticks(range(len(klabels)))
@@ -378,7 +424,7 @@ def render_performance_figures_png(
             counts[d] = 0
             order_d.append(d)
         counts[d] += 1
-    xb = np.arange(len(order_d))
+    xb = list(range(len(order_d)))
     bars = ax4.bar(xb, [counts[d] for d in order_d], color="#818cf8", edgecolor="#c7d2fe", alpha=0.9)
     ax4.set_xticks(xb)
     ax4.set_xticklabels([d[:10] + "…" if len(d) > 12 else d for d in order_d], rotation=35, ha="right", fontsize=8, color="#444444")
@@ -422,8 +468,14 @@ def render_performance_figures_png(
             continue
         cmap2 = colormaps["tab10"]
         for ki, key in enumerate(sub_keys):
-            vals = [e["features"].get(key, np.nan) for e in sub_ev]
-            if not any(np.isfinite(v) for v in vals):
+            vals: list[float] = []
+            for e in sub_ev:
+                v = e["features"].get(key)
+                try:
+                    vals.append(float(v) if v is not None else float("nan"))
+                except (TypeError, ValueError):
+                    vals.append(float("nan"))
+            if not any(math.isfinite(v) for v in vals):
                 continue
             ax.plot(
                 seq_m,
@@ -454,3 +506,16 @@ def render_performance_figures_png(
     )
 
     return figures
+
+
+def render_performance_figures_png(
+    analytics: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """
+    Returns list of { title, mime, data_base64, width_px, height_px }.
+    Matplotlib is imported lazily so mentor timeline APIs work even when NumPy DLLs break on Windows.
+    """
+    try:
+        return _render_performance_figures_mpl(analytics)
+    except Exception as e:
+        return _placeholder_chart_pngs(f"{type(e).__name__}: {e}")

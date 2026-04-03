@@ -508,13 +508,9 @@ function App() {
     const decoder = new TextDecoder('utf-8')
     let buf = ''
     let currentEvent: string | null = null
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      // Some runtimes may provide `value` as undefined; guard it.
-      if (value) buf += decoder.decode(value, { stream: true })
-
+    
+    const parseFromBuffer = (input: string) => {
+      buf = input
       while (true) {
         const idx = buf.indexOf('\n\n')
         if (idx < 0) break
@@ -522,7 +518,7 @@ function App() {
         buf = buf.slice(idx + 2)
 
         const lines = chunk.split('\n').map((l) => l.trimEnd())
-        let dataLines: string[] = []
+        const dataLines: string[] = []
         currentEvent = null
         for (const line of lines) {
           if (line.startsWith('event:')) currentEvent = line.slice('event:'.length).trim()
@@ -541,32 +537,52 @@ function App() {
           onDelta(dataStr)
         }
       }
-    }
 
-    // Flush remaining buffer if the server closed the connection without the trailing `\n\n`.
-    // This prevents the last few characters from being dropped.
-    if (buf.trim()) {
-      const chunk = buf
-      buf = ''
-      const lines = chunk.split('\n').map((l) => l.trimEnd())
-      const dataLines: string[] = []
-      let lastEvent: string | null = null
-      for (const line of lines) {
-        if (line.startsWith('event:')) lastEvent = line.slice('event:'.length).trim()
-        if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trimStart())
-      }
-      const dataStr = dataLines.join('\n')
-      if (dataStr) {
-        if (lastEvent === 'final') {
-          try {
-            onFinal(JSON.parse(dataStr))
-          } catch {
-            onFinal(dataStr)
+      // Flush remaining buffer (server may omit trailing `\n\n`)
+      if (buf.trim()) {
+        const chunk = buf
+        buf = ''
+        const lines = chunk.split('\n').map((l) => l.trimEnd())
+        const dataLines: string[] = []
+        let lastEvent: string | null = null
+        for (const line of lines) {
+          if (line.startsWith('event:')) lastEvent = line.slice('event:'.length).trim()
+          if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trimStart())
+        }
+        const dataStr = dataLines.join('\n')
+        if (dataStr) {
+          if (lastEvent === 'final') {
+            try {
+              onFinal(JSON.parse(dataStr))
+            } catch {
+              onFinal(dataStr)
+            }
+          } else {
+            onDelta(dataStr)
           }
-        } else {
-          onDelta(dataStr)
         }
       }
+    }
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        // Some runtimes may provide `value` as undefined; guard it.
+        if (value) buf += decoder.decode(value, { stream: true })
+
+        // Incremental parsing for already-complete SSE events.
+        parseFromBuffer(buf)
+      }
+    } catch (e) {
+      // Fallback: if streaming read breaks (e.g. the browser throws about not calling `read()`),
+      // attempt to read the whole response as text and parse it as SSE.
+      const fullText = await resp.text().catch(() => '')
+      if (fullText) {
+        parseFromBuffer(fullText)
+        return
+      }
+      throw e
     }
   }
 

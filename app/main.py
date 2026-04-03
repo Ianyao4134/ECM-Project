@@ -61,6 +61,7 @@ from .audit_store import (
     list_audit_for_user,
 )
 from .config import settings as _settings_for_prompts
+from .seed_bootstrap import apply_seed_data_if_needed
 from .sessions import (
     get_module1_session,
     get_module2_session,
@@ -82,6 +83,7 @@ app = Flask("ecm-thinking-engine")
 init_analytics_db()
 init_module4_sessions_db()
 init_audit_db()
+apply_seed_data_if_needed()
 
 
 def _client_ip() -> str:

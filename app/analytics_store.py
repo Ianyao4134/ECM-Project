@@ -93,6 +93,17 @@ def init_analytics_db() -> None:
             conn.close()
 
 
+def is_analytics_seedable() -> bool:
+    """True when f1_analytics has no rows (first deploy / empty DB)."""
+    with _LOCK:
+        conn = _conn()
+        try:
+            row = conn.execute("SELECT COUNT(*) AS c FROM f1_analytics").fetchone()
+            return int(row["c"] or 0) == 0
+        finally:
+            conn.close()
+
+
 def upsert_f4_analytics(
     *,
     conversation_id: str,

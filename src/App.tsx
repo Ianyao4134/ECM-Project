@@ -495,8 +495,16 @@ function App() {
   }
 
   const readSse = async (resp: Response, onDelta: (text: string) => void, onFinal: (data: unknown) => void) => {
+    const contentType = resp.headers.get('content-type') || ''
+    // If backend returned JSON/HTML (e.g. DEEPSEEK 401 -> error JSON), don't try to parse it as SSE stream.
+    if (!contentType.includes('text/event-stream')) {
+      const bodyText = await resp.text().catch(() => '')
+      const preview = (bodyText || '').slice(0, 600)
+      throw new Error(`Expected SSE but got "${contentType}". Body: ${preview}`)
+    }
+
     const reader = resp.body?.getReader()
-    if (!reader) throw new Error('No response body')
+    if (!reader) throw new Error('No response body (expected SSE)')
     const decoder = new TextDecoder('utf-8')
     let buf = ''
     let currentEvent: string | null = null
@@ -504,7 +512,8 @@ function App() {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      buf += decoder.decode(value, { stream: true })
+      // Some runtimes may provide `value` as undefined; guard it.
+      if (value) buf += decoder.decode(value, { stream: true })
 
       while (true) {
         const idx = buf.indexOf('\n\n')

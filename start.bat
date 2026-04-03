@@ -4,28 +4,13 @@ setlocal
 cd /d "%~dp0"
 
 echo ==========================================
-echo DeepSeek Notes - Dev Launcher
+echo ECM V2.1 - Dev Launcher
 echo Project: %cd%
 echo ==========================================
 echo.
-
-echo [INFO] Starting backend (ECM Thinking Engine)...
-if exist "start_ecm_backend.bat" (
-  start "ECM Backend" cmd /c "start_ecm_backend.bat"
-) else (
-  echo [WARN] start_ecm_backend.bat not found. Backend will NOT be started automatically.
-)
+echo [INFO] One command starts: API ^(8787^) + Vite ^(5173^) + ECM Python ^(9000^).
+echo [INFO] Open in browser: http://127.0.0.1:5173/
 echo.
-echo [INFO] Waiting backend health (http://127.0.0.1:9000/health)...
-powershell -NoProfile -Command "$ok=$false; for($i=0; $i -lt 15; $i++){ try { $r=Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:9000/health' -TimeoutSec 2; if($r.StatusCode -eq 200){ $ok=$true; break } } catch {}; Start-Sleep -Seconds 1 }; if($ok){ exit 0 } else { exit 1 }"
-if errorlevel 1 (
-  echo [WARN] Backend health check failed. Login/register may fail.
-  echo [WARN] Please check the "ECM Backend" window for detailed errors.
-  echo.
-) else (
-  echo [OK] Backend is healthy.
-  echo.
-)
 
 where node >nul 2>&1
 if errorlevel 1 goto :ERR_NODE
@@ -46,27 +31,12 @@ goto :START
 
 :WARN_ENV
 echo [WARN] .env not found.
-echo        Please create .env and set DEEPSEEK_API_KEY first.
-echo        You can copy .env.example to .env
+echo        Copy .env.example to .env and set DEEPSEEK_API_KEY ^(required for AI features^).
 echo.
-goto :START
 
 :START
-echo [INFO] Opening browser...
-where msedge >nul 2>&1
-if not errorlevel 1 (
-  start "" msedge "http://127.0.0.1:5173/"
-) else (
-  start "" "http://127.0.0.1:5173/"
-)
+echo [INFO] Starting dev server ^(close this window or press Ctrl+C to stop^)...
 echo.
-echo If Vite says port 5173 is in use, it may choose 5174/5175.
-echo In that case, use the URL printed in this window.
-echo.
-echo [INFO] Starting dev server (web + api)...
-echo Close this window to stop the server.
-echo.
-
 call npm.cmd run dev
 echo.
 echo [INFO] Dev server stopped.
@@ -74,18 +44,16 @@ pause
 exit /b 0
 
 :ERR_NODE
-echo [ERROR] Node.js not found. Please install Node.js first.
+echo [ERROR] Node.js not found. Run setup.bat or install Node.js LTS.
 pause
 exit /b 1
 
 :ERR_NPM
-echo [ERROR] npm not found. Please reinstall Node.js (npm is included).
+echo [ERROR] npm not found. Reinstall Node.js.
 pause
 exit /b 1
 
 :ERR_INSTALL
-echo.
 echo [ERROR] npm install failed.
 pause
 exit /b 1
-

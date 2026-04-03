@@ -119,10 +119,18 @@ def stream_deepseek(
     with httpx.Client(timeout=settings.request_timeout_s) as client:
         with client.stream("POST", url, headers=headers, json=payload) as resp:
             if resp.status_code >= 400:
+                # When using `client.stream(...)`, httpx requires reading the body
+                # (resp.read()) before accessing json/text. Otherwise you may get:
+                # "Attempted to access streaming response content, without having called `read()`."
+                raw = resp.read()
                 try:
-                    data = resp.json()
+                    text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
                 except Exception:
-                    data = resp.text
+                    text = str(raw)
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    data = text
                 raise DeepSeekError(f"DeepSeek error {resp.status_code}: {data}")
 
             for raw_line in resp.iter_lines():

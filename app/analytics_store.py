@@ -6,13 +6,15 @@ import sqlite3
 import threading
 from typing import Any
 
+from .db_paths import analytics_db_path
+
 _LOCK = threading.Lock()
-_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "analytics.db")
 
 
 def _conn() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(_DB_PATH)
+    path = analytics_db_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    c = sqlite3.connect(path)
     c.row_factory = sqlite3.Row
     return c
 

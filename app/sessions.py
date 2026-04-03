@@ -9,6 +9,8 @@ import os
 import json
 import sqlite3
 
+from .db_paths import sessions_db_path
+
 
 Module1Step = int
 Module2Step = int
@@ -35,12 +37,10 @@ _module2_sessions: dict[str, "Module2Session"] = {}
 _module4_sessions: dict[str, "Module4Session"] = {}
 _module5_sessions: dict[str, "Module5Session"] = {}
 
-_SESSIONS_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "sessions.db")
-
-
 def _sessions_conn() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(_SESSIONS_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(_SESSIONS_DB_PATH)
+    path = sessions_db_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    c = sqlite3.connect(path)
     c.row_factory = sqlite3.Row
     return c
 

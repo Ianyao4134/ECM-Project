@@ -46,7 +46,7 @@ docker run --rm -p 8080:8080 -e DEEPSEEK_API_KEY=你的密钥 ecm-app
 
 ## 4. 数据持久化说明
 
-后端 SQLite 默认在 `data/` 目录。容器**无持久卷**时，重部署会清空数据。若需要长期保存用户与对话，请在云平台为 `/app/data` 挂载磁盘（或改用托管数据库）。
+用户与项目等 JSON、以及 **`analytics.db` / `sessions.db`** 均落在 **`ECM_DATA_DIR`**（默认项目根目录下的 `data/`）。在 Docker / Railway 中设置 **`ECM_DATA_DIR=/app/data`** 并为 **`/app/data` 挂载一个 Volume** 即可持久化全部文件数据，**无需第二个卷**。容器**无持久卷**时，重部署会清空数据（或改用托管数据库）。
 
 ### 4.1 内置测试种子数据（Git 仓库内）
 

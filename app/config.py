@@ -10,7 +10,8 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
-    deepseek_api_key: str | None = os.getenv("DEEPSEEK_API_KEY")
+    # Railway 里有时 `DEEPSEEK_API_KEY` 是只读 Secret，我们允许兜底读取 `DEEPSEEK_API_KEY_2`
+    deepseek_api_key: str | None = (os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY_2") or "").strip() or None
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 

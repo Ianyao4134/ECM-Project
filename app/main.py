@@ -61,7 +61,7 @@ from .audit_store import (
     list_audit_for_user,
 )
 from .config import settings as _settings_for_prompts
-from .seed_bootstrap import apply_seed_data_if_needed
+from .seed_bootstrap import apply_seed_data_if_needed, restore_baked_data_if_empty
 from .sessions import (
     get_module1_session,
     get_module2_session,
@@ -80,6 +80,7 @@ from .sessions import (
 
 
 app = Flask("ecm-thinking-engine")
+restore_baked_data_if_empty()
 init_analytics_db()
 init_module4_sessions_db()
 init_audit_db()

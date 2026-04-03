@@ -52,6 +52,10 @@ docker run --rm -p 8080:8080 -e DEEPSEEK_API_KEY=你的密钥 ecm-app
 
 仓库包含 `seed/data/`（示例用户、项目、画像、笔记）。**首次启动**且 `ECM_DATA_DIR` 下尚无 `users.json` 时，会自动复制到数据目录，并在 analytics 库为空时写入示例分析行。测试账号：`demo` / `demo123456`（验证码按登录页类型填写）。生产环境若不要种子，可设置环境变量 `ECM_DISABLE_SEED=1`。
 
+### 4.2 将 `data/` 提交到 Git（仅建议私有仓库）
+
+若把 **`data/`**（含 `users.json`、`projects.json`、SQLite 等）提交到仓库，Docker 构建会额外复制到 **`/app/_baked_data`**。部署后若 **`ECM_DATA_DIR` 为空卷**（尚无 `users.json`），进程会从该备份自动恢复到 `ECM_DATA_DIR`，无需手动上传。**切勿在公开仓库中提交真实用户密码与对话**；若必须提交，请使用 **GitHub Private** 仓库。设置 **`ECM_SKIP_BAKED_RESTORE=1`** 可关闭自动恢复。
+
 ## 5. 本地模拟“云端”单端口（可选）
 
 先构建前端，再分别启动 Python 与网关（二选一）：

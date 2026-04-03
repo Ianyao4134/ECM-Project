@@ -1,0 +1,37 @@
+[
+  {
+    "id": "b03b045d-80ae-4853-a92a-465932475a59",
+    "username": "student1",
+    "password": "123456"
+  },
+  {
+    "id": "b35ca3ca-0dff-4010-a547-5cd93593d14f",
+    "username": "teacher",
+    "password": "123456"
+  },
+  {
+    "id": "8664040a-bb95-47da-94c3-ce4736da8e63",
+    "username": "teacher1",
+    "password": "123456"
+  },
+  {
+    "id": "b2a863eb-b04a-41ab-ae46-625b1d6b71d1",
+    "username": "student2",
+    "password": "123456"
+  },
+  {
+    "id": "0be9e0b7-8a99-4ecf-bd63-0c202694b0ca",
+    "username": "student4",
+    "password": "123456"
+  },
+  {
+    "id": "21e3fd6c-1096-4c2c-b969-f2888462dd45",
+    "username": "sdaaddad",
+    "password": "123456"
+  },
+  {
+    "id": "35124fd0-ece6-4dc2-aabc-96a78c95e2ed",
+    "username": "studentX",
+    "password": "123456"
+  }
+]

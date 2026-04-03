@@ -27,6 +27,9 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
+# Duplicate of repo `data/` for first-boot restore when ECM_DATA_DIR is an empty volume.
+COPY data /app/_baked_data
+
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV HOST=0.0.0.0

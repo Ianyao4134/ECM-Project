@@ -2,6 +2,10 @@
 Copy committed seed JSON into ECM_DATA_DIR on first run, and insert sample analytics
 when the analytics DB is empty. Disabled with ECM_DISABLE_SEED=1.
 
+Committed `data/` in the repo is copied into the image at /app/_baked_data. On first
+run, if ECM_DATA_DIR has no users.json (e.g. empty Railway volume), files are
+restored from that backup so deploy works without manual upload.
+
 Seed credentials are for testing only (see seed/data/users.json).
 """
 

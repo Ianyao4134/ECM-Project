@@ -28,8 +28,13 @@ dist-ssr
 .env.*
 !.env.example
 
-# Local runtime data (users, projects, SQLite)
-/data/
+# WARNING: If you commit data/ (users, chats, SQLite), treat the repo as sensitive.
+# Use a private GitHub repo only. Never expose plaintext passwords in a public repo.
+
+# Do not commit zip exports placed under data/
+data/*.zip
+
+# Legacy SQLite directory (commit databases as data/analytics.db instead)
 /app/data/
 
 # Python

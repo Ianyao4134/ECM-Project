@@ -2937,9 +2937,16 @@ def module1_next_stream():
                 yield _sse(piece)
             assistant_text = "".join(collected_parts).strip() or "我没有收到有效输出。请你再补充一句你的回答。"
         except Exception as e:
+            # Streaming may fail on some runtimes (httpx / upstream streaming quirks).
+            # Fallback to non-streaming DeepSeek so Function 1 can still progress.
             err = str(e)
-            yield _sse(err)
             assistant_text = err
+            try:
+                resp = asyncio.run(call_deepseek(system_prompt=system_prompt, user_input=model_user_input))
+                assistant_text = extract_assistant_content(resp).strip() or err
+                yield _sse(assistant_text)
+            except Exception:
+                yield _sse(err)
 
         s.history.append({"role": "assistant", "content": assistant_text})
 
